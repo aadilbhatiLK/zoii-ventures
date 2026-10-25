@@ -5,6 +5,7 @@ import type { Queryable } from "../../db";
 import { type Actor, type Deps, addDays, audit, emit, fyCode, getSettings, need, nextNumber, todayIst } from "../../lib/context";
 import { conflict, invalid, notFound, parse } from "../../lib/errors";
 import { iso, isUuid, likeTerm } from "../../lib/query";
+import { idempotent } from "../../lib/idempotency";
 import { clientStateCode } from "../crm/clients";
 import { MONTHS, addMonths } from "../delivery/subscriptions";
 import { renderCommercialPdf } from "../sales/pdf";
@@ -110,14 +111,24 @@ export class InvoiceService {
     return r.rows[0].id;
   }
 
-  private async checkOrderCap(q: Queryable, salesOrderId: string, addTotal: string, excludeInvoiceId?: string) {
-    const so = (await q.query<{ grand_total: string; status: string; billed: string | null }>(
-      `SELECT so.grand_total, so.status, (SELECT sum(total) FROM invoices i WHERE i.sales_order_id = so.id AND i.status <> 'cancelled' AND i.id <> coalesce($2::uuid, '00000000-0000-0000-0000-000000000000')) AS billed
-         FROM sales_orders so WHERE so.id = $1 FOR UPDATE`, [salesOrderId, excludeInvoiceId ?? null])).rows[0];
+  /**
+   * Billing cap per sales order, compared pre-tax (tax follows from taxable value):
+   * taxable billed on the order ≤ the order's taxable value + approved change requests.
+   */
+  private async checkOrderCap(q: Queryable, salesOrderId: string, invoiceId: string) {
+    const so = (await q.query<{ taxable_total: string; status: string; billed: string | null; extra: string | null; this_taxable: string }>(
+      `SELECT so.taxable_total, so.status,
+              (SELECT sum(taxable_total) FROM invoices i WHERE i.sales_order_id = so.id AND i.status <> 'cancelled' AND i.id <> $2) AS billed,
+              (SELECT sum(cr.impact_amount) FROM change_requests cr JOIN projects p ON p.id = cr.project_id
+                WHERE p.sales_order_id = so.id AND cr.status = 'approved') AS extra,
+              (SELECT taxable_total FROM invoices WHERE id = $2) AS this_taxable
+         FROM sales_orders so WHERE so.id = $1 FOR UPDATE`, [salesOrderId, invoiceId])).rows[0];
     if (!so) throw invalid("Unknown sales order.");
     if (so.status === "cancelled") throw conflict("This sales order is cancelled.");
-    if (toPaise(so.billed ?? "0") + toPaise(addTotal) > toPaise(so.grand_total))
-      throw conflict(`This would bill ${fromPaise(toPaise(so.billed ?? "0") + toPaise(addTotal))} against an order of ${so.grand_total}. Approve a change request for extra work first.`);
+    const cap = toPaise(so.taxable_total) + toPaise(so.extra ?? "0");
+    const after = toPaise(so.billed ?? "0") + toPaise(so.this_taxable);
+    if (after > cap)
+      throw conflict(`This would bill ${fromPaise(after)} (before tax) against ${fromPaise(cap)} agreed on the order and approved change requests. Approve a change request for extra work first.`);
   }
 
   async create(a: Actor, body: unknown) {
@@ -127,7 +138,7 @@ export class InvoiceService {
       if (!(await q.query(`SELECT 1 FROM clients WHERE id = $1 AND organization_id = $2`, [d.clientId, a.orgId])).rows.length) throw invalid("Unknown client.", { clientId: ["Unknown"] });
       if (d.salesOrderId && !(await q.query(`SELECT 1 FROM sales_orders WHERE id = $1 AND client_id = $2`, [d.salesOrderId, d.clientId])).rows.length) throw invalid("That sales order belongs to another client.");
       const id = await this.createDraft(q, a, d);
-      if (d.salesOrderId) await this.checkOrderCap(q, d.salesOrderId, (await q.query<{ total: string }>(`SELECT total FROM invoices WHERE id = $1`, [id])).rows[0].total, id);
+      if (d.salesOrderId) await this.checkOrderCap(q, d.salesOrderId, id);
       return id;
     });
     return this.get(a, id);
@@ -137,10 +148,11 @@ export class InvoiceService {
     need(a, "finance.invoice.issue");
     if (!isUuid(milestoneId)) throw notFound("Milestone");
     const id = await this.db.tx(async (q) => {
-      const m = (await q.query<{ id: string; name: string; seq: number; amount: string; status: string; project_id: string; client_id: string; sales_order_id: string | null; code: string; billable: boolean }>(
-        `SELECT m.*, p.client_id, p.sales_order_id, p.code, p.billable FROM milestones m JOIN projects p ON p.id = m.project_id WHERE m.id = $1 AND m.organization_id = $2 FOR UPDATE OF m`, [milestoneId, a.orgId])).rows[0];
+      const m = (await q.query<{ id: string; name: string; seq: number; amount: string; status: string; project_id: string; client_id: string; sales_order_id: string | null; code: string; billable: boolean; project_status: string }>(
+        `SELECT m.*, p.client_id, p.sales_order_id, p.code, p.billable, p.status AS project_status FROM milestones m JOIN projects p ON p.id = m.project_id WHERE m.id = $1 AND m.organization_id = $2 FOR UPDATE OF m`, [milestoneId, a.orgId])).rows[0];
       if (!m) throw notFound("Milestone");
       if (!m.billable) throw conflict("This project is not billable.");
+      if (!["active", "on_hold", "completed"].includes(m.project_status)) throw conflict(`Milestones of a ${m.project_status} project can't be invoiced.`);
       if (m.status !== "signed_off") throw conflict(m.status === "invoiced" ? "This milestone is already invoiced." : "Invoice a milestone after the client signs it off.");
       if (toPaise(m.amount) <= 0n) throw conflict("This milestone has no billing amount.");
       const existing = await q.query(`SELECT 1 FROM invoices WHERE milestone_id = $1 AND status <> 'cancelled'`, [milestoneId]);
@@ -168,7 +180,7 @@ export class InvoiceService {
         clientId: so.client_id, salesOrderId, invoiceDate: this.today(), notes: `Against sales order ${so.number}`,
         lines: lines.map((l) => ({ description: l.description, hsnSac: l.hsn_sac, quantity: l.quantity, unitPrice: l.unit_price, discountPct: l.discount_pct })),
       });
-      await this.checkOrderCap(q, salesOrderId, (await q.query<{ total: string }>(`SELECT total FROM invoices WHERE id = $1`, [id])).rows[0].total, id);
+      await this.checkOrderCap(q, salesOrderId, id);
       return id;
     });
     return this.get(a, id);
@@ -185,7 +197,7 @@ export class InvoiceService {
       if (cur.milestone_id || cur.subscription_id) throw conflict("This draft comes from a milestone or subscription. Delete it and regenerate instead.");
       await q.query(`DELETE FROM invoices WHERE id = $1`, [id]);
       const nid = await this.createDraft(q, a, d);
-      if (d.salesOrderId) await this.checkOrderCap(q, d.salesOrderId, (await q.query<{ total: string }>(`SELECT total FROM invoices WHERE id = $1`, [nid])).rows[0].total, nid);
+      if (d.salesOrderId) await this.checkOrderCap(q, d.salesOrderId, nid);
       return nid;
     });
     return this.get(a, newId);
@@ -198,6 +210,14 @@ export class InvoiceService {
       if (!cur) throw notFound("Invoice");
       if (cur.status !== "draft") throw conflict("Only drafts can be deleted.");
       await q.query(`DELETE FROM invoices WHERE id = $1`, [id]);
+      // Give the period back to the subscription so the next billing run drafts it again —
+      // only when it was the latest billed period (otherwise later periods would be re-billed).
+      if (cur.subscription_id && cur.billing_period)
+        await q.query(
+          `UPDATE subscriptions s SET next_billing_date = $2::date
+            WHERE s.id = $1 AND s.next_billing_date > $2::date
+              AND NOT EXISTS (SELECT 1 FROM invoices i WHERE i.subscription_id = s.id AND i.status <> 'cancelled' AND i.billing_period::date > $2::date)`,
+          [cur.subscription_id, cur.billing_period]);
       await audit(q, a, "invoice.delete_draft", "invoice", id);
     });
   }
@@ -211,10 +231,15 @@ export class InvoiceService {
       if (cur.status !== "draft") throw conflict("This invoice is already issued.");
       if (cur.invoice_date > addDays(this.today(), 0)) throw conflict("Invoices can't be issued with a future date.");
       const lines = (await q.query<LRow>(`SELECT * FROM invoice_lines WHERE invoice_id = $1 ORDER BY line_no`, [id])).rows;
+      // The buyer snapshot below uses the client's current GSTIN/state, so the tax split must too.
+      const posNow = await clientStateCode(q, a.orgId, cur.client_id);
+      const supNow = await supplierState(q, a.orgId);
+      if (!posNow || posNow !== cur.place_of_supply || supNow !== cur.supplier_state)
+        throw conflict(`The place of supply changed since this draft was made (now ${posNow ?? "unknown"}, draft ${cur.place_of_supply}). Delete and recreate the draft so CGST/SGST vs IGST is correct.`);
       // Re-price with the rules in force on the invoice date; drafts may predate a rate change.
       const priced = await priceLines(q, a.orgId, lines.map((l) => ({ description: l.description, hsnSac: l.hsn_sac, quantity: l.quantity, unitPrice: l.unit_price, discountPct: l.discount_pct })), cur.invoice_date, cur.supply_type);
       if (priced.totals.grandTotal !== cur.total) throw conflict(`GST rates changed since this draft was made (total would be ${priced.totals.grandTotal}). Recreate the draft.`);
-      if (cur.sales_order_id) await this.checkOrderCap(q, cur.sales_order_id, cur.total, id);
+      if (cur.sales_order_id) await this.checkOrderCap(q, cur.sales_order_id, id);
       const s = await getSettings(q, a.orgId);
       const n = await nextNumber(q, a.orgId, `invoice:${fyCode(cur.invoice_date)}`);
       const number = `${s.profile.docPrefix}/INV/${fyCode(cur.invoice_date)}/${String(n).padStart(4, "0")}`;
@@ -242,10 +267,10 @@ export class InvoiceService {
   }
 
   /** Credit note against specific invoice lines; tax reverses at each line's own rate. */
-  async creditNote(a: Actor, invoiceId: string, body: unknown) {
+  async creditNote(a: Actor, invoiceId: string, body: unknown, idempotencyKey: string | undefined) {
     need(a, "finance.invoice.issue");
     const d = parse(CreditNoteInputSchema, body);
-    await this.db.tx(async (q) => {
+    await this.db.tx((q) => idempotent(q, a.orgId, "credit_note.create", idempotencyKey, { invoiceId, ...d }, async () => {
       const inv = (await q.query<IRow>(`${I_SELECT} WHERE i.id = $1 AND i.organization_id = $2 FOR UPDATE OF i`, [invoiceId, a.orgId])).rows[0];
       if (!inv) throw notFound("Invoice");
       if (inv.status === "draft" || inv.status === "cancelled") throw conflict("Credit notes apply to issued invoices.");
@@ -289,7 +314,8 @@ export class InvoiceService {
         [a.orgId, cn.rows[0].id, x.lineId, fromPaise(x.taxable), fromPaise(x.cgst), fromPaise(x.sgst), fromPaise(x.igst)]);
       await refreshInvoiceStatus(q, invoiceId);
       await audit(q, a, "credit_note.issue", "invoice", invoiceId, { number, total: fromPaise(total), reason: d.reason });
-    });
+      return { creditNoteId: cn.rows[0].id };
+    }));
     return this.get(a, invoiceId);
   }
 

@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { ROLES, can, leadScope, type Role } from "@/lib/permissions";
+import { ROLES, can, leadScope, requiresMfa, type Role } from "@/lib/permissions";
 import { ROLE_PERMISSIONS, PERMISSIONS } from "@/lib/permissions/registry";
 import type { Router } from "../../app";
-import { type Actor, type Deps, audit, need } from "../../lib/context";
+import { type Actor, type Deps, audit, need, notify } from "../../lib/context";
 import { HttpError, conflict, forbidden, notFound, parse } from "../../lib/errors";
 import { isUuid } from "../../lib/query";
 import { AuthService } from "../auth/service";
@@ -107,7 +107,12 @@ export function userRoutes(r: Router, deps: Deps) {
     const d = parse(UserPatch, body);
     const target = isUuid(params.id) ? await getUserRow(db, params.id) : null;
     if (!target || target.organization_id !== actor.orgId) throw notFound("User");
-    if (d.roles) guardRoleGrant(actor, d.roles, target);
+    // Any change to a super admin / founder (phone, status, name…) is super-admin only.
+    guardRoleGrant(actor, d.roles ?? [], target);
+    const phoneChanging = d.phone !== undefined && (d.phone ? toE164(d.phone) : null) !== target.phone_e164;
+    // The phone is a sign-in factor; for MFA-protected accounts only a super admin may change it.
+    if (phoneChanging && requiresMfa({ roles: target.roles ?? [] }) && !actor.roles.includes("super_admin"))
+      throw forbidden("Only a super admin can change the phone number of an account that uses two-step verification.");
     if (target.id === actor.userId && (d.status && d.status !== "active")) throw conflict("You can't suspend your own account.");
     if (target.id === actor.userId && d.roles && actor.roles.includes("super_admin") && !d.roles.includes("super_admin"))
       throw conflict("You can't remove your own Super Admin role. Ask another super admin.");
@@ -126,14 +131,17 @@ export function userRoutes(r: Router, deps: Deps) {
       const rolesChanged = d.roles && JSON.stringify([...d.roles].sort()) !== JSON.stringify([...(target.roles ?? [])].sort());
       if (rolesChanged) await setRoles(q, actor.orgId, target.id, d.roles!, actor.userId);
       // Role or status changes take effect immediately: existing sessions are revoked.
-      if (rolesChanged || (d.status && d.status !== "active")) {
+      if (rolesChanged || phoneChanging || (d.status && d.status !== "active")) {
         await q.query(`UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, [target.id]);
       }
       await audit(q, actor, "user.update", "user", target.id, {
         ...(rolesChanged ? { roles: { from: target.roles, to: d.roles } } : {}),
         ...(d.status ? { status: { from: target.status, to: d.status } } : {}),
         ...(d.teamId !== undefined ? { teamId: { from: target.team_id, to: d.teamId } } : {}),
+        ...(phoneChanging ? { phoneChanged: true } : {}),
       });
+      if (phoneChanging)
+        await notify(q, actor.orgId, target.id, { kind: "system", title: "Your sign-in phone number was changed", body: "If you didn't expect this, contact your administrator immediately.", href: "/me" });
     });
     return toAdminUser((await getUserRow(db, target.id))!);
   });

@@ -45,6 +45,10 @@ registerApprovalHandler("leave_request", async (q, a, id, approved, note) => {
   if (!l || l.status !== "pending") throw conflict("This leave request is no longer pending.");
   if (l.requested_by === a.userId || l.user_id === a.userId) throw forbidden("You can't approve your own leave.");
   if (!a.permissions.has("hr.leave.approve")) throw forbidden();
+  if (approved) {
+    const locked = await q.query(`SELECT 1 FROM payroll_runs WHERE organization_id = $1 AND month BETWEEN $2 AND $3 AND status IN ('approved','posted')`, [l.organization_id, l.from_date.slice(0, 7), l.to_date.slice(0, 7)]);
+    if (locked.rows.length) throw conflict("Payroll covering these dates is already approved, so attendance is locked. Reject this request or reopen payroll first.");
+  }
   await q.query(`UPDATE leave_requests SET status = $2, decided_by = $3, decided_at = now(), decision_note = $4 WHERE id = $1`, [id, approved ? "approved" : "rejected", a.userId, note]);
   if (approved) {
     for (const d of await workingDates(q, l.organization_id, l.from_date, l.to_date))
@@ -152,7 +156,11 @@ export class HrService {
     need(a, "hr.manage");
     const d = parse(EmployeeInputSchema, body);
     await this.db.tx(async (q) => {
-      if (!isUuid(id) || !(await q.query(`SELECT 1 FROM employees WHERE id = $1 AND organization_id = $2 FOR UPDATE`, [id, a.orgId])).rows.length) throw notFound("Employee");
+      const emp = isUuid(id) ? (await q.query<{ user_id: string | null }>(`SELECT user_id FROM employees WHERE id = $1 AND organization_id = $2 FOR UPDATE`, [id, a.orgId])).rows[0] : undefined;
+      if (!emp) throw notFound("Employee");
+      // Salary goes to the bank account on file: nobody edits their own HR record's bank details.
+      if (emp.user_id === a.userId && d.userId !== undefined && d.userId !== a.userId) throw forbidden("You can't unlink your own employee record.");
+      if (emp.user_id === a.userId && d.bankAccount) throw forbidden("You can't change your own bank details. Ask another HR manager.");
       await this.writeEmployee(q, a, d, id);
       await audit(q, a, "employee.update", "employee", id, { name: d.fullName, bankAccount: d.bankAccount ? "changed" : undefined });
     });
@@ -188,7 +196,9 @@ export class HrService {
     const basic = toPaise(d.components.find((c) => c.code === "BASIC")!.value);
     const gross = sum(d.components.filter((c) => c.kind === "earning").map((c) => c.calc === "fixed" ? toPaise(c.value) : percentOf(basic, c.value)));
     await this.db.tx(async (q) => {
-      if (!isUuid(employeeId) || !(await q.query(`SELECT 1 FROM employees WHERE id = $1 AND organization_id = $2`, [employeeId, a.orgId])).rows.length) throw notFound("Employee");
+      const emp = isUuid(employeeId) ? (await q.query<{ user_id: string | null }>(`SELECT user_id FROM employees WHERE id = $1 AND organization_id = $2`, [employeeId, a.orgId])).rows[0] : undefined;
+      if (!emp) throw notFound("Employee");
+      if (emp.user_id === a.userId) throw forbidden("You can't change your own salary. Ask another payroll manager.");
       const posted = await q.query(`SELECT 1 FROM payroll_runs r JOIN payslips p ON p.run_id = r.id WHERE p.employee_id = $1 AND r.status = 'posted' AND r.month >= $2`, [employeeId, d.effectiveFrom.slice(0, 7)]);
       if (posted.rows.length) throw conflict("Payroll is already posted for that month. Make the change effective from a later month.");
       await q.query(

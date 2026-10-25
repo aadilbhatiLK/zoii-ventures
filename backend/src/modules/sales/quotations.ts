@@ -1,13 +1,14 @@
 import { ClientDecisionSchema, QuotationInputSchema, type Quotation, type QuotationLine } from "@/lib/api/modules/sales";
-import { fromPaise, toPaise, toScaled } from "@/lib/money";
+import { divRound, fromPaise, times, toPaise, toScaled } from "@/lib/money";
 import { computeTax, supplyTypeFor, type TaxLineInput } from "@/lib/tax/gst";
+import { leadScope } from "@/lib/permissions";
 import type { Queryable } from "../../db";
 import { type Actor, type Deps, addDays, audit, commercialScope, emit, fyCode, getSettings, need, nextNumber, todayIst } from "../../lib/context";
 import { HttpError, conflict, forbidden, invalid, notFound, parse } from "../../lib/errors";
 import { iso, isUuid, likeTerm } from "../../lib/query";
 import { clientStateCode } from "../crm/clients";
 import { createSalesOrderFromQuotation } from "../delivery/orders";
-import { cancelPendingApproval, registerApprovalHandler, requestApproval } from "./approvals";
+import { cancelPendingApproval, recordEditor, registerApprovalHandler, requestApproval } from "./approvals";
 import { requireTaxRate } from "./catalogue";
 import { quotationPdf, type Party } from "./pdf";
 
@@ -114,6 +115,23 @@ export class QuotationService {
     return { pos, sup, supplyType: supplyTypeFor(sup, pos) };
   }
 
+  /** Linked scope document and lead must belong to this client, and the lead must be visible to the caller. */
+  private async checkRefs(q: Queryable, a: Actor, d: { clientId: string; documentId?: string | null; leadId?: string | null }) {
+    if (d.documentId) {
+      const doc = (await q.query<{ client_id: string | null }>(`SELECT client_id FROM documents WHERE id = $1 AND organization_id = $2`, [d.documentId, a.orgId])).rows[0];
+      if (!doc) throw invalid("Unknown document.", { documentId: ["Unknown"] });
+      if (doc.client_id && doc.client_id !== d.clientId) throw invalid("That document belongs to another client.", { documentId: ["Different client"] });
+    }
+    if (d.leadId) {
+      const lead = (await q.query<{ client_id: string | null; owner_id: string; owner_team: string | null }>(
+        `SELECT l.client_id, l.owner_id, u.team_id AS owner_team FROM leads l JOIN users u ON u.id = l.owner_id WHERE l.id = $1 AND l.organization_id = $2`, [d.leadId, a.orgId])).rows[0];
+      const scope = leadScope({ roles: a.roles });
+      const visible = lead && (scope === "all" || (scope === "team" && !!a.teamId && lead.owner_team === a.teamId) || lead.owner_id === a.userId);
+      if (!visible) throw invalid("Unknown lead.", { leadId: ["Unknown"] });
+      if (lead.client_id && lead.client_id !== d.clientId) throw invalid("That lead converted into another client.", { leadId: ["Different client"] });
+    }
+  }
+
   private async writeLines(q: Queryable, orgId: string, quotationId: string, priced: Awaited<ReturnType<typeof priceLines>>) {
     await q.query(`DELETE FROM quotation_lines WHERE quotation_id = $1`, [quotationId]);
     for (const [i, l] of priced.totals.lines.entries()) {
@@ -140,6 +158,7 @@ export class QuotationService {
     if (validUntil < quoteDate) throw invalid("Validity must end on or after the quote date.", { validUntil: ["Before quote date"] });
     const id = await this.db.tx(async (q) => {
       const h = await this.header(q, a, d.clientId);
+      await this.checkRefs(q, a, d);
       const priced = await priceLines(q, a.orgId, d.lines, quoteDate, h.supplyType);
       const n = await nextNumber(q, a.orgId, `quotation:${fyCode(quoteDate)}`);
       const number = `${settings.profile.docPrefix}/QT/${fyCode(quoteDate)}/${String(n).padStart(4, "0")}`;
@@ -167,12 +186,14 @@ export class QuotationService {
       const validUntil = d.validUntil ?? r.valid_until;
       if (validUntil < quoteDate) throw invalid("Validity must end on or after the quote date.", { validUntil: ["Before quote date"] });
       const h = await this.header(q, a, d.clientId);
+      await this.checkRefs(q, a, d);
       const priced = await priceLines(q, a.orgId, d.lines, quoteDate, h.supplyType);
       await q.query(
         `UPDATE quotations SET client_id=$2, lead_id=$3, document_id=$4, quote_date=$5, valid_until=$6, supplier_state=$7, place_of_supply=$8, supply_type=$9, notes=$10, terms=$11, approval_reasons='{}' WHERE id = $1`,
         [id, d.clientId, d.leadId ?? null, d.documentId ?? null, quoteDate, validUntil, h.sup, h.pos, h.supplyType, d.notes ?? null, d.terms ?? null],
       );
       await this.writeLines(q, a.orgId, id, priced);
+      await recordEditor(q, a, "quotation", id);
       await audit(q, a, "quotation.update", "quotation", id, { grandTotal: { from: r.grand_total, to: priced.totals.grandTotal } });
     });
     return this.get(a, id);
@@ -182,12 +203,15 @@ export class QuotationService {
   private async approvalReasons(q: Queryable, orgId: string, id: string, grandTotal: string) {
     const s = await getSettings(q, orgId);
     const lines = (await q.query<LRow & { floor_price: string | null }>(
-      `SELECT l.*, p.floor_price FROM quotation_lines l LEFT JOIN products p ON p.id = l.product_id WHERE l.quotation_id = $1 ORDER BY l.line_no`, [id],
+      `SELECT l.*, coalesce(p.floor_price, (SELECT max(p2.floor_price) FROM products p2 WHERE p2.organization_id = $2 AND l.product_id IS NULL AND lower(p2.name) = lower(trim(l.description)))) AS floor_price
+         FROM quotation_lines l LEFT JOIN products p ON p.id = l.product_id WHERE l.quotation_id = $1 ORDER BY l.line_no`, [id, orgId],
     )).rows;
     const reasons: string[] = [];
     for (const l of lines) {
       if (toScaled(l.discount_pct, 2) > toScaled(String(s.quotations.discountApprovalPct), 2)) reasons.push(`Line ${l.line_no}: ${l.discount_pct}% discount is above the ${s.quotations.discountApprovalPct}% limit`);
-      if (l.floor_price && toPaise(l.unit_price) < toPaise(l.floor_price)) reasons.push(`Line ${l.line_no}: price ${l.unit_price} is below the floor ${l.floor_price}`);
+      // Compare what the client actually pays per unit (after discount) with the floor.
+      if (l.floor_price && toPaise(l.taxable) < times(toPaise(l.floor_price), l.quantity))
+        reasons.push(`Line ${l.line_no}: net price ${fromPaise(divRound(toPaise(l.taxable) * 1000n, toScaled(l.quantity, 3)))} per unit is below the floor ${l.floor_price}`);
     }
     if (toPaise(grandTotal) > toPaise(s.quotations.valueApprovalAbove)) reasons.push(`Total ${grandTotal} is above ${s.quotations.valueApprovalAbove}`);
     return reasons;

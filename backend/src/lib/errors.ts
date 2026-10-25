@@ -40,6 +40,10 @@ export function mapPgError(e: unknown): HttpError | null {
   if (code === "23505") return conflict(`That value is already in use${constraint ? ` (${constraint})` : ""}.`);
   if (code === "23503") return invalid("A referenced record does not exist.");
   if (code === "23514") return invalid(`The change breaks a data rule${constraint ? ` (${constraint})` : ""}.`);
+  // Malformed input that slipped past schema checks must be a 422, never a 500.
+  if (code === "22P02") return invalid("A value has the wrong format (for example an id).");
+  if (code === "22007" || code === "22008") return invalid("That isn't a valid date.");
+  if (code === "22003") return invalid("An amount is too large.");
   if (code === "40001" || code === "40P01") return conflict("Another change happened at the same time. Retry.");
   if (code === "42501" || code === "P0001") return conflict((e as Error).message);
   return null;

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { buildApp } from "../src/app";
 import { loadConfig } from "../src/config";
 import { createPgliteDb, type Db } from "../src/db";
@@ -57,6 +58,8 @@ export function client(t: TestCtx, cookie: string) {
   return {
     get: (u: string) => call("GET", u),
     post: (u: string, b?: unknown, h?: Record<string, string>) => call("POST", u, b ?? {}, h),
+    /** POST with a fresh Idempotency-Key (money writes require one). */
+    postKeyed: (u: string, b?: unknown) => call("POST", u, b ?? {}, { "idempotency-key": `test-${randomUUID()}` }),
     patch: (u: string, b: unknown) => call("PATCH", u, b),
     put: (u: string, b: unknown) => call("PUT", u, b),
     del: (u: string) => call("DELETE", u),

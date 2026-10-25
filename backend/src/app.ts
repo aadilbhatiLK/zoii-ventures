@@ -10,6 +10,13 @@ import { HttpError, mapPgError } from "./lib/errors";
 import { sha256 } from "./lib/crypto";
 import { requiresMfa, type Role } from "@/lib/permissions";
 import { registerModules } from "./modules";
+import { isUuid } from "./lib/query";
+
+/** Every `:id` route parameter is a uuid; anything else is simply not found (never a 500). */
+function checkIdParams(req: FastifyRequest) {
+  const p = (req.params ?? {}) as Record<string, string>;
+  if (p.id !== undefined && !isUuid(p.id)) throw new HttpError("NOT_FOUND", "Not found.");
+}
 
 export const SESSION_COOKIE = "zoii_session";
 
@@ -178,6 +185,7 @@ export async function buildApp(opts: BuildOptions): Promise<FastifyInstance & { 
             const base = ctxOf(req, reply);
             const actor = isPublic ? (undefined as unknown as Actor) : await authenticate(req);
             req.actor = actor;
+            checkIdParams(req);
             const data = await handler({ ...base, actor });
             if (reply.sent) return reply;
             if (data === undefined) return reply.status(204).send();
@@ -201,6 +209,7 @@ export async function buildApp(opts: BuildOptions): Promise<FastifyInstance & { 
             url: path,
             handler: async (req, reply) => {
               const actor = await authenticate(req);
+              checkIdParams(req);
               await h({ ...ctxOf(req, reply), actor });
               return reply;
             },

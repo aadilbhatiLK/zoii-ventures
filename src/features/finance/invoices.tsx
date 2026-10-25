@@ -179,7 +179,9 @@ function CreditNoteDialog({ invoice, onClose }: { invoice: Invoice; onClose: () 
   const [reason, setReason] = useState("");
   const [date, setDate] = useState(today());
   const [amounts, setAmounts] = useState<Record<string, string>>({});
-  const m = useApiMutation("POST", `/invoices/${invoice.id}/credit-notes`, { invalidate: [["invoice"], ["invoices"]], success: "Credit note issued" });
+  // One key per open form: a double-click or retry replays instead of posting twice.
+  const [idemKey] = useState(() => `cn-${crypto.randomUUID()}`);
+  const m = useApiMutation("POST", `/invoices/${invoice.id}/credit-notes`, { invalidate: [["invoice"], ["invoices"]], success: "Credit note issued", headers: () => ({ "Idempotency-Key": idemKey }) });
   const lines = Object.entries(amounts).filter(([, v]) => Number(v) > 0).map(([invoiceLineId, taxable]) => ({ invoiceLineId, taxable }));
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>

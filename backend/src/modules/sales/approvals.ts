@@ -41,17 +41,29 @@ export async function requestApproval(
   return res.rows[0].id;
 }
 
+/** Records that `a` changed this record; editors may not approve it later. */
+export async function recordEditor(q: Queryable, a: Actor, entityType: EntityType, entityId: string) {
+  await q.query(
+    `INSERT INTO record_editors (organization_id, entity_type, entity_id, user_id) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+    [a.orgId, entityType, entityId, a.userId],
+  );
+}
+
+async function isEditor(q: Queryable, a: Actor, entityType: EntityType, entityId: string) {
+  return (await q.query(`SELECT 1 FROM record_editors WHERE organization_id = $1 AND entity_type = $2 AND entity_id = $3 AND user_id = $4`, [a.orgId, entityType, entityId, a.userId])).rows.length > 0;
+}
+
 export async function cancelPendingApproval(q: Queryable, entityType: EntityType, entityId: string) {
   await q.query(`UPDATE approval_requests SET status = 'cancelled', decided_at = now() WHERE entity_type = $1 AND entity_id = $2 AND status = 'pending'`, [entityType, entityId]);
 }
 
-interface Row { id: string; entity_type: EntityType; entity_id: string; title: string; reason: string; required_permission: string; status: ApprovalRequest["status"]; requested_by: string; requested_at: Date; decided_by: string | null; decided_at: Date | null; decision_note: string | null }
+interface Row { id: string; entity_type: EntityType; entity_id: string; title: string; reason: string; required_permission: string; status: ApprovalRequest["status"]; requested_by: string; requested_at: Date; decided_by: string | null; decided_at: Date | null; decision_note: string | null; edited_by_me?: boolean }
 
 const toApproval = (a: Actor) => (r: Row): ApprovalRequest => ({
   id: r.id, entityType: r.entity_type, entityId: r.entity_id, title: r.title, reason: r.reason, requiredPermission: r.required_permission,
   status: r.status, requestedBy: r.requested_by, requestedAt: iso(r.requested_at)!, decidedBy: r.decided_by, decidedAt: iso(r.decided_at),
   decisionNote: r.decision_note, href: hrefs[r.entity_type](r.entity_id),
-  canDecide: r.status === "pending" && r.requested_by !== a.userId && a.permissions.has(r.required_permission as Permission),
+  canDecide: r.status === "pending" && r.requested_by !== a.userId && !r.edited_by_me && a.permissions.has(r.required_permission as Permission),
 });
 
 export class ApprovalService {
@@ -61,9 +73,11 @@ export class ApprovalService {
     const perms = [...a.permissions];
     const st = status === "decided" ? ["approved", "rejected", "cancelled"] : ["pending"];
     const r = await this.deps.db.query<Row>(
-      `SELECT * FROM approval_requests WHERE organization_id = $1 AND status = ANY($2)
-         AND (required_permission = ANY($3) OR requested_by = $4)
-       ORDER BY requested_at DESC LIMIT 200`,
+      `SELECT ar.*, EXISTS (SELECT 1 FROM record_editors re WHERE re.organization_id = ar.organization_id AND re.entity_type = ar.entity_type
+                AND re.entity_id = ar.entity_id AND re.user_id = $4) AS edited_by_me
+         FROM approval_requests ar WHERE ar.organization_id = $1 AND ar.status = ANY($2)
+         AND (ar.required_permission = ANY($3) OR ar.requested_by = $4)
+       ORDER BY ar.requested_at DESC LIMIT 200`,
       [a.orgId, st, perms, a.userId],
     );
     return r.rows.map(toApproval(a));
@@ -78,6 +92,8 @@ export class ApprovalService {
       if (!a.permissions.has(r.required_permission as Permission)) throw forbidden();
       if (r.status !== "pending") throw conflict("This approval was already decided.");
       if (r.requested_by === a.userId) throw forbidden("You can't approve your own request.");
+      if (d.decision === "approve" && (await isEditor(q, a, r.entity_type, r.entity_id)))
+        throw forbidden("You edited this, so someone else has to approve it.");
       const approved = d.decision === "approve";
       await q.query(
         `UPDATE approval_requests SET status = $2, decided_by = $3, decided_at = now(), decision_note = $4 WHERE id = $1`,

@@ -58,7 +58,12 @@ export function adminRoutes(r: Router, deps: Deps) {
         merged.payroll = p;
       }
       await q.query(`INSERT INTO organization_settings (organization_id, settings) VALUES ($1,$2) ON CONFLICT (organization_id) DO UPDATE SET settings = $2, updated_at = now()`, [actor.orgId, JSON.stringify(merged)]);
-      await audit(q, actor, "settings.update", "organization", actor.orgId, d);
+      // The audit log is readable by auditors: never copy the full company bank account into it.
+      const bank = (d as { profile?: { bank?: { account?: string } | null } }).profile?.bank;
+      const redacted = bank?.account
+        ? { ...d, profile: { ...(d as { profile: object }).profile, bank: { ...bank, account: `••••${bank.account.slice(-4)}` } } }
+        : d;
+      await audit(q, actor, "settings.update", "organization", actor.orgId, redacted);
     });
     return getSettings(db, actor.orgId);
   });

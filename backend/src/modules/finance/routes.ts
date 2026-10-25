@@ -22,7 +22,7 @@ export function financeRoutes(r: Router, deps: Deps) {
   r.post("/finance/accounts", async ({ actor, body }) => ledger.createAccount(actor, body), { status: 201 });
   r.get("/finance/accounts/:id/ledger", async ({ actor, params, query }) => ledger.ledger(actor, params.id, query.from ? String(query.from) : undefined, query.to ? String(query.to) : undefined));
   r.get("/finance/journals", async ({ actor, query }) => ledger.journals(actor, query));
-  r.post("/finance/journals", async ({ actor, body }) => ledger.postManual(actor, body), { status: 201 });
+  r.post("/finance/journals", async ({ actor, body, req }) => ledger.postManual(actor, body, req.headers["idempotency-key"] as string | undefined), { status: 201 });
   r.get("/finance/journals/:id", async ({ actor, params }) => ledger.journal(actor, params.id));
   r.post("/finance/journals/:id/reverse", async ({ actor, params, body }) => ledger.reverse(actor, params.id, (body ?? {}) as { date?: string; reason?: string }), { status: 201 });
 
@@ -35,7 +35,7 @@ export function financeRoutes(r: Router, deps: Deps) {
   r.put("/invoices/:id", async ({ actor, params, body }) => inv.updateDraft(actor, params.id, body));
   r.delete("/invoices/:id", async ({ actor, params }) => inv.deleteDraft(actor, params.id));
   r.post("/invoices/:id/issue", async ({ actor, params }) => inv.issue(actor, params.id));
-  r.post("/invoices/:id/credit-notes", async ({ actor, params, body }) => inv.creditNote(actor, params.id, body), { status: 201 });
+  r.post("/invoices/:id/credit-notes", async ({ actor, params, body, req }) => inv.creditNote(actor, params.id, body, req.headers["idempotency-key"] as string | undefined), { status: 201 });
   r.raw("GET", "/invoices/:id/pdf", async ({ actor, params, reply }) => {
     const { filename, body } = await inv.pdf(actor, params.id);
     reply.header("Content-Type", "application/pdf").header("Content-Disposition", `inline; filename="${filename}"`).send(body);
@@ -49,7 +49,7 @@ export function financeRoutes(r: Router, deps: Deps) {
   r.get("/vendors", async ({ actor }) => pay.vendors(actor));
   r.post("/vendors", async ({ actor, body }) => pay.createVendor(actor, body), { status: 201 });
   r.get("/bills", async ({ actor, query }) => pay.list(actor, query));
-  r.post("/bills", async ({ actor, body }) => pay.create(actor, body), { status: 201 });
+  r.post("/bills", async ({ actor, body, req }) => pay.create(actor, body, req.headers["idempotency-key"] as string | undefined), { status: 201 });
   r.get("/bills/:id", async ({ actor, params }) => pay.get(actor, params.id));
   r.post("/bills/:id/payments", async ({ actor, params, body, req }) => pay.pay(actor, params.id, body, req.headers["idempotency-key"] as string | undefined));
 

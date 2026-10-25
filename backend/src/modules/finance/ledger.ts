@@ -3,6 +3,7 @@ import { fromPaise, sum, toPaise } from "@/lib/money";
 import type { Queryable } from "../../db";
 import { type Actor, type Deps, audit, fyCode, need, nextNumber } from "../../lib/context";
 import { HttpError, conflict, invalid, notFound, parse } from "../../lib/errors";
+import { idempotent } from "../../lib/idempotency";
 import { iso, isUuid } from "../../lib/query";
 
 /** Chart of accounts for an Indian services company. System keys are what postings use. */
@@ -71,8 +72,11 @@ export async function postJournal(
   const cr = sum(lines.map((l) => toPaise(l.credit ?? "0")));
   if (lines.length < 2 || dr !== cr || dr === 0n) throw invalid(`Journal doesn't balance (debits ${fromPaise(dr)}, credits ${fromPaise(cr)}).`);
   for (const l of lines) if (toPaise(l.debit ?? "0") < 0n || toPaise(l.credit ?? "0") < 0n) throw invalid("Amounts can't be negative.");
-  const closed = await q.query(`SELECT 1 FROM fiscal_periods WHERE organization_id = $1 AND month = $2 AND status = 'closed'`, [a.orgId, e.date.slice(0, 7)]);
-  if (closed.rows.length) throw conflict(`${e.date.slice(0, 7)} is closed. Post into an open period or ask finance to reopen it.`);
+  // Lock the period row (FOR SHARE) for the rest of this transaction: a concurrent close
+  // (which updates the row) waits for us, and we see its result if it committed first.
+  await q.query(`INSERT INTO fiscal_periods (organization_id, month) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [a.orgId, e.date.slice(0, 7)]);
+  const period = await q.query<{ status: string }>(`SELECT status FROM fiscal_periods WHERE organization_id = $1 AND month = $2 FOR SHARE`, [a.orgId, e.date.slice(0, 7)]);
+  if (period.rows[0]?.status === "closed") throw conflict(`${e.date.slice(0, 7)} is closed. Post into an open period or ask finance to reopen it.`);
   const n = await nextNumber(q, a.orgId, `journal:${fyCode(e.date)}`);
   const r = await q.query<{ id: string }>(
     `INSERT INTO journal_entries (organization_id, number, entry_date, source_type, source_id, memo, reversal_of, posted_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
@@ -143,10 +147,10 @@ export class LedgerService {
     return this.toJe(r, lines.rows.map((l) => ({ lineNo: l.line_no, accountId: l.account_id, accountCode: l.code, accountName: l.name, debit: l.debit, credit: l.credit, partyType: l.party_type, partyId: l.party_id, description: l.description })));
   }
 
-  async postManual(a: Actor, body: unknown) {
+  async postManual(a: Actor, body: unknown, idempotencyKey: string | undefined) {
     need(a, "finance.journal.post");
     const d = parse(JournalInputSchema, body);
-    const id = await this.db.tx(async (q) => {
+    const id = await this.db.tx((q) => idempotent<string>(q, a.orgId, "journal.manual", idempotencyKey, d, async () => {
       const ids = [...new Set(d.lines.map((l) => l.accountId))];
       const ok = await q.query<{ id: string; active: boolean }>(`SELECT id, active FROM accounts WHERE organization_id = $1 AND id = ANY($2)`, [a.orgId, ids]);
       if (ok.rows.length !== ids.length) throw invalid("Unknown account in the journal.");
@@ -154,7 +158,7 @@ export class LedgerService {
       const id = await postJournal(q, a, { date: d.entryDate, sourceType: "manual", memo: d.memo, lines: d.lines });
       await audit(q, a, "journal.post", "journal_entry", id, { memo: d.memo, lines: d.lines.length });
       return id;
-    });
+    }));
     return this.journal(a, id);
   }
 

@@ -222,14 +222,14 @@ describe("Sprint 5 — finance", () => {
       await q.query(`INSERT INTO journal_lines (organization_id, entry_id, line_no, account_id, credit) VALUES ($1,$2,2,$3,90)`, [org, e.rows[0].id, await sys("capital")]);
     })).rejects.toThrow(/not balanced/);
     await expect(t.db.query(`UPDATE journal_lines SET debit = debit + 1`)).rejects.toThrow(/append-only/);
-    const bad = await as.fin.post("/finance/journals", { entryDate: "2026-10-20", memo: "Unbalanced", lines: [{ accountId: await sys("bank"), debit: "100" }, { accountId: await sys("capital"), credit: "90" }] });
+    const bad = await as.fin.postKeyed("/finance/journals", { entryDate: "2026-10-20", memo: "Unbalanced", lines: [{ accountId: await sys("bank"), debit: "100" }, { accountId: await sys("capital"), credit: "90" }] });
     expect(bad.status).toBe(422);
-    const ok = await as.fin.post("/finance/journals", { entryDate: "2026-10-01", memo: "Capital introduced", lines: [{ accountId: await sys("bank"), debit: "500000" }, { accountId: await sys("capital"), credit: "500000" }] });
+    const ok = await as.fin.postKeyed("/finance/journals", { entryDate: "2026-10-01", memo: "Capital introduced", lines: [{ accountId: await sys("bank"), debit: "500000" }, { accountId: await sys("capital"), credit: "500000" }] });
     expect(ok.status).toBe(201);
     const rev = await as.fin.post(`/finance/journals/${ok.data.id}/reverse`, { reason: "Duplicate entry test" });
     expect(rev.status).toBe(201);
     expect((await as.fin.post(`/finance/journals/${ok.data.id}/reverse`, { reason: "again" })).status).toBe(409);
-    await as.fin.post("/finance/journals", { entryDate: "2026-10-01", memo: "Capital introduced", lines: [{ accountId: await sys("bank"), debit: "500000" }, { accountId: await sys("capital"), credit: "500000" }] });
+    await as.fin.postKeyed("/finance/journals", { entryDate: "2026-10-01", memo: "Capital introduced", lines: [{ accountId: await sys("bank"), debit: "500000" }, { accountId: await sys("capital"), credit: "500000" }] });
   });
 
   it("receipts are idempotent, honour TDS and can't over-allocate", async () => {
@@ -254,11 +254,11 @@ describe("Sprint 5 — finance", () => {
     expect(inv.data.igst).toBe("1800.00");
     const issued = await as.acct.post(`/invoices/${inv.data.id}/issue`);
     expect(issued.data.number).toBe("ZV/INV/2627/0002");
-    const cn = await as.acct.post(`/invoices/${inv.data.id}/credit-notes`, { noteDate: "2026-10-24", reason: "Half day not delivered", lines: [{ invoiceLineId: issued.data.lines[0].id, taxable: "2500" }] });
+    const cn = await as.acct.postKeyed(`/invoices/${inv.data.id}/credit-notes`, { noteDate: "2026-10-24", reason: "Half day not delivered", lines: [{ invoiceLineId: issued.data.lines[0].id, taxable: "2500" }] });
     expect(cn.status).toBe(201);
     expect(cn.data.creditNotes[0].total).toBe("2950.00");
     expect(cn.data).toMatchObject({ status: "partially_paid", outstanding: "8850.00" });
-    expect((await as.acct.post(`/invoices/${inv.data.id}/credit-notes`, { noteDate: "2026-10-24", reason: "Too much", lines: [{ invoiceLineId: issued.data.lines[0].id, taxable: "9000" }] })).status).toBe(422);
+    expect((await as.acct.postKeyed(`/invoices/${inv.data.id}/credit-notes`, { noteDate: "2026-10-24", reason: "Too much", lines: [{ invoiceLineId: issued.data.lines[0].id, taxable: "9000" }] })).status).toBe(422);
     ids.invoice2 = inv.data.id;
   });
 
@@ -266,9 +266,9 @@ describe("Sprint 5 — finance", () => {
     const v = await as.acct.post("/vendors", { name: "CloudHost India", gstin: "08DAFPB0613A1ZN" });
     expect(v.status).toBe(201);
     const exp = (await as.acct.get("/finance/accounts")).data.find((a: { code: string }) => a.code === "5200");
-    const b = await as.acct.post("/bills", { kind: "bill", vendorId: v.data.id, vendorBillNo: "CH-991", billDate: "2026-10-10", description: "Servers October", expenseAccountId: exp.id, taxable: "10000", gstRate: "18", tdsSection: "194J", tdsAmount: "1000" });
+    const b = await as.acct.postKeyed("/bills", { kind: "bill", vendorId: v.data.id, vendorBillNo: "CH-991", billDate: "2026-10-10", description: "Servers October", expenseAccountId: exp.id, taxable: "10000", gstRate: "18", tdsSection: "194J", tdsAmount: "1000" });
     expect(b.data).toMatchObject({ cgst: "900.00", sgst: "900.00", total: "11800.00", payable: "10800.00", status: "unpaid" });
-    expect((await as.acct.post("/bills", { kind: "bill", vendorId: v.data.id, vendorBillNo: "CH-991", billDate: "2026-10-10", description: "dup", expenseAccountId: exp.id, taxable: "1" })).status).toBe(409);
+    expect((await as.acct.postKeyed("/bills", { kind: "bill", vendorId: v.data.id, vendorBillNo: "CH-991", billDate: "2026-10-10", description: "dup", expenseAccountId: exp.id, taxable: "1" })).status).toBe(409);
     const payBody = { paymentDate: "2026-10-20", amount: "10800", paidFromAccountId: await sys("bank"), reference: "NEFT77" };
     expect((await as.acct.post(`/bills/${b.data.id}/payments`, payBody)).status).toBe(422); // key required
     const p = await as.acct.post(`/bills/${b.data.id}/payments`, payBody, { "Idempotency-Key": "bill-pay-ch991-1" });
@@ -326,7 +326,7 @@ describe("Sprint 5 — finance", () => {
     const bank = await sys("bank"), cap = await sys("capital");
     const close = await as.fin.post("/finance/periods/2026-09/close", {});
     expect(close.status).toBe(200);
-    const post = await as.fin.post("/finance/journals", { entryDate: "2026-09-15", memo: "Late entry", lines: [{ accountId: bank, debit: "1" }, { accountId: cap, credit: "1" }] });
+    const post = await as.fin.postKeyed("/finance/journals", { entryDate: "2026-09-15", memo: "Late entry", lines: [{ accountId: bank, debit: "1" }, { accountId: cap, credit: "1" }] });
     expect(post.status).toBe(409);
     expect((await as.fin.post("/finance/periods/2026-10/close", {})).status).toBe(409); // current month
     expect((await as.fin.post("/finance/periods/2026-09/reopen", { reason: "Late vendor bill found" })).status).toBe(200);
@@ -430,7 +430,7 @@ describe("Sprint 6 — people, support, automation, audit", () => {
     const a = await as.auditor.get("/audit?action=invoice.");
     expect(a.status).toBe(200);
     expect(a.data.items.some((x: { action: string }) => x.action === "invoice.issue")).toBe(true);
-    expect((await as.auditor.post("/finance/journals", { entryDate: "2026-10-01", memo: "nope", lines: [] })).status).toBe(403);
+    expect((await as.auditor.postKeyed("/finance/journals", { entryDate: "2026-10-01", memo: "nope", lines: [] })).status).toBe(403);
     expect((await as.auditor.get("/reports/trial-balance")).status).toBe(200);
     expect((await as.sales1.get("/audit")).status).toBe(403);
     await expect(t.db.query(`DELETE FROM audit_events`)).rejects.toThrow(/append-only/);

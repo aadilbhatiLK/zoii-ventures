@@ -114,8 +114,12 @@ export class AuthService {
   }
 
   /** Password (or OTP) is only a first factor for privileged roles. */
-  async afterFirstFactor(user: UserRow, meta: { ip: string | null; userAgent?: string }): Promise<SignInResult> {
+  async afterFirstFactor(user: UserRow, meta: { ip: string | null; userAgent?: string }, factor: "password" | "otp" = "password"): Promise<SignInResult> {
     if (requiresMfa({ roles: user.roles ?? [] })) {
+      // Enrolling a new authenticator needs the password: a phone number an admin can edit
+      // must never be enough to bind a fresh second factor to a privileged account.
+      if (!user.mfa_enrolled && factor === "otp")
+        throw new HttpError("FORBIDDEN", "Sign in with your email and password to set up two-step verification.");
       if (user.mfa_enrolled) {
         const c = await this.newChallenge(user.id, user.organization_id, "mfa", newToken());
         return { status: "mfa_required", challengeId: c.id };
@@ -206,7 +210,7 @@ export class AuthService {
     );
     const user = await getUserRow(this.db, userId);
     if (!user || user.status !== "active") throw new HttpError("UNAUTHENTICATED", "That code is incorrect.");
-    return this.afterFirstFactor(user, meta);
+    return this.afterFirstFactor(user, meta, "otp");
   }
 
   async forgotPassword(emailRaw: string, meta: { ip: string | null }) {
@@ -262,7 +266,7 @@ export class AuthService {
     });
   }
 
-  async changePassword(userId: string, current: string, next: string) {
+  async changePassword(userId: string, current: string, next: string, keepSessionId?: string) {
     const r = await this.db.query<{ password_hash: string | null; email: string; organization_id: string }>(`SELECT password_hash, email, organization_id FROM users WHERE id = $1`, [userId]);
     const u = r.rows[0];
     await this.throttle([`change:${userId}`]);
@@ -273,6 +277,8 @@ export class AuthService {
     const problem = passwordProblem(next, u.email);
     if (problem) throw new HttpError("VALIDATION", problem, { newPassword: [problem] });
     await this.db.query(`UPDATE users SET password_hash = $2, password_changed_at = now() WHERE id = $1`, [userId, await hashPassword(next)]);
+    // Sign out every other device: a stolen session must not survive a password change.
+    await this.db.query(`UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL AND id IS DISTINCT FROM $2::uuid`, [userId, keepSessionId ?? null]);
     await this.db.query(
       `INSERT INTO audit_events (organization_id, actor_user_id, action, entity_type, entity_id) VALUES ($1, $2, 'auth.password_changed', 'user', $2)`,
       [u.organization_id, userId],

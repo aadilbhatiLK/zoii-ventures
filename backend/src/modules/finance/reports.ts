@@ -28,7 +28,7 @@ export class ReportService {
   }
 
   async trialBalance(a: Actor, q: Record<string, unknown>) {
-    need(a, "finance.view", "reports.view");
+    need(a, "finance.view"); // financial statements: finance roles only (not every reports.view holder)
     const asOf = this.date(q.asOf, this.today());
     const rows = (await this.balances(a.orgId, null, asOf)).filter((x) => x.d || x.c);
     const net = rows.map((x) => ({ ...this.row(x), debit: fromPaise(x.d > x.c ? x.d - x.c : 0n), credit: fromPaise(x.c > x.d ? x.c - x.d : 0n) }));
@@ -37,7 +37,7 @@ export class ReportService {
   }
 
   async profitAndLoss(a: Actor, q: Record<string, unknown>) {
-    need(a, "finance.view", "reports.view");
+    need(a, "finance.view"); // financial statements: finance roles only (not every reports.view holder)
     const to = this.date(q.to, this.today());
     const from = this.date(q.from, this.fyStart(to));
     const rows = await this.balances(a.orgId, from, to);
@@ -48,7 +48,7 @@ export class ReportService {
   }
 
   async balanceSheet(a: Actor, q: Record<string, unknown>) {
-    need(a, "finance.view", "reports.view");
+    need(a, "finance.view"); // financial statements: finance roles only (not every reports.view holder)
     const asOf = this.date(q.asOf, this.today());
     const rows = await this.balances(a.orgId, null, asOf);
     const pick = (t: string) => rows.filter((x) => x.type === t && (x.d || x.c)).map((x) => this.row(x));
@@ -61,7 +61,7 @@ export class ReportService {
 
   /** Direct-method cash flow from bank & cash accounts, grouped by what generated each movement. */
   async cashFlow(a: Actor, q: Record<string, unknown>) {
-    need(a, "finance.view", "reports.view");
+    need(a, "finance.view"); // financial statements: finance roles only (not every reports.view holder)
     const to = this.date(q.to, this.today());
     const from = this.date(q.from, this.fyStart(to));
     const open = (await this.db.query<{ v: string | null }>(
@@ -97,7 +97,7 @@ export class ReportService {
   }
 
   async receivablesAgeing(a: Actor, q: Record<string, unknown>) {
-    need(a, "finance.view", "reports.view");
+    need(a, "finance.view"); // financial statements: finance roles only (not every reports.view holder)
     const asOf = this.date(q.asOf, this.today());
     // As-of: payments and credit notes dated after asOf don't reduce the balance.
     const r = await this.db.query<{ party_id: string; party_name: string; due_date: string; open: string }>(
@@ -111,7 +111,7 @@ export class ReportService {
   }
 
   async payablesAgeing(a: Actor, q: Record<string, unknown>) {
-    need(a, "finance.view", "reports.view");
+    need(a, "finance.view"); // financial statements: finance roles only (not every reports.view holder)
     const asOf = this.date(q.asOf, this.today());
     const r = await this.db.query<{ party_id: string; party_name: string; due_date: string; open: string }>(
       `SELECT b.vendor_id AS party_id, v.name AS party_name, b.due_date,
@@ -123,7 +123,7 @@ export class ReportService {
 
   /** Month summary to prepare GSTR-1/3B. It is a working paper, not a return. */
   async gstSummary(a: Actor, q: Record<string, unknown>): Promise<GstSummary> {
-    need(a, "finance.view", "reports.view");
+    need(a, "finance.view"); // financial statements: finance roles only (not every reports.view holder)
     const month = String(q.month ?? this.today().slice(0, 7));
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw invalid("Month is YYYY-MM.");
     const out = await this.db.query<{ rate: string; taxable: string; cgst: string; sgst: string; igst: string }>(

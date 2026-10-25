@@ -72,7 +72,7 @@ export function authRoutes(r: Router, deps: Deps) {
 
   r.post("/auth/password/change", async ({ actor, body }) => {
     const b = parse(z.object({ currentPassword: z.string().max(200), newPassword: z.string().max(200) }), body);
-    await svc.changePassword(actor.userId, b.currentPassword, b.newPassword);
+    await svc.changePassword(actor.userId, b.currentPassword, b.newPassword, actor.sessionId);
     return undefined;
   });
 

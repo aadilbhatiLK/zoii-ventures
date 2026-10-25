@@ -73,6 +73,34 @@ An independent review of the Sprint 1 code found 18 issues: 3 high, 9 medium, 6 
 
 While writing those tests, a further redirect bypass was found and fixed: `/ /../..//evil.com` normalised to `//evil.com`.
 
+### Sprint 2–6 backend review
+
+An independent reviewer read the backend code and reproduced issues with probe tests. Nineteen findings; all are fixed. Tests in `backend/tests/review-fixes.test.ts` reproduce the confirmed ones; the rest were fixed from code reading.
+
+| # | Finding | Fix | Regression test |
+| - | ------- | --- | --------------- |
+| 1 | Bank summary leaked another organisation's statement balance and counts | Account ownership checked first; every query org-scoped | yes |
+| 2 | An approver could rewrite someone else's draft (document, quotation) and then approve it | New append-only `record_editors` (migration 0008); anyone who edited a record can't approve it | yes |
+| 3 | Floor-price check used the list price, not the price after discount; free-text lines skipped it | Compares taxable value with floor × quantity; free-text lines named like a catalogue product are checked too | yes |
+| 4 | A founder could change a super admin's or finance user's phone/status; with an MFA reset, an OTP to that phone could enrol a new authenticator (account takeover) | Super-admin/founder targets are super-admin only for every field; phone changes on MFA accounts are super-admin only, revoke sessions and notify the user; OTP sign-in can never start MFA enrolment | yes |
+| 5 | Period close could race with a posting into the same month | Postings take `FOR SHARE` on the period row; close updates it (exclusive) | code reading |
+| 6 | Approved change-request milestones couldn't be invoiced (cap ignored CRs) | Cap compares taxable value with order taxable + approved CR impact | code reading (existing invoice-cap tests still pass) |
+| 7 | An active project's scope document could be swapped; links not checked against the client on edit | Scope/order changes only while planned; client match re-checked | code reading |
+| 8 | Invoice issued with a stale place of supply after the client's GSTIN changed | Issue refuses if place of supply changed since the draft | code reading |
+| 9 | HR/payroll users could change their own salary or bank details | Refused for one's own employee record (and unlinking it) | code reading |
+| 10 | Password change left other sessions alive | Revokes all other sessions | yes |
+| 11 | Bills, bill payments, manual journals and credit notes had no idempotency | Idempotency-Key required (UI sends one per form) | yes (journals, bill payments) |
+| 12 | Outbox could double-send; `run-now` processed every organisation | Batch claimed with `FOR UPDATE SKIP LOCKED`; `run-now` scoped to the caller's org | code reading |
+| 13 | Leave approval rewrote attendance after payroll was approved | Same payroll lock as attendance edits | code reading |
+| 14 | Milestones of planned/cancelled projects could be signed off and invoiced | Project status checked for UAT, sign-off and invoicing | code reading |
+| 15 | Malformed ids/dates and numeric overflow returned 500 | `:id` params validated centrally; Postgres format/overflow errors map to 422 | yes |
+| 16 | Deleting a subscription draft skipped that period forever | The period is given back when it was the latest billed | code reading |
+| 17 | Full company bank account number copied into the audit log | Masked to the last 4 digits | yes |
+| 18 | Ticket priority change crashed without an SLA policy; subscription not checked against the client | Both validated | code reading |
+| 19 | `reports.view` alone opened P&L, balance sheet, GST and ageing; quotation lead/document not checked | Financial statements need `finance.view`; lead (with lead scope) and document must match the client | yes (reports) |
+
+Residual: the leave quota/overlap check can still race under truly concurrent requests (low impact; approval is a second gate).
+
 ## Checks run in Sprint 1
 
 - `npm audit` — 0 vulnerabilities (after zod upgrade).

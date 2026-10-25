@@ -196,9 +196,12 @@ export class BankingService {
   async summary(a: Actor, bankAccountId: string) {
     need(a, "finance.view");
     if (!isUuid(bankAccountId)) throw invalid("Pick a bank account.");
+    // Every query must be org-scoped: an id from another organisation must reveal nothing.
+    const owns = (await this.db.query(`SELECT 1 FROM accounts WHERE id = $1 AND organization_id = $2 AND is_bank`, [bankAccountId, a.orgId])).rows.length;
+    if (!owns) throw notFound("Bank account");
     const book = (await this.db.query<{ v: string | null }>(`SELECT sum(debit - credit) AS v FROM journal_lines WHERE account_id = $1 AND organization_id = $2`, [bankAccountId, a.orgId])).rows[0].v ?? "0";
-    const last = (await this.db.query<{ balance: string | null; txn_date: string }>(`SELECT balance, txn_date FROM bank_statement_lines WHERE bank_account_id = $1 AND balance IS NOT NULL ORDER BY txn_date DESC, id DESC LIMIT 1`, [bankAccountId])).rows[0];
-    const counts = (await this.db.query<{ status: string; n: number }>(`SELECT status, count(*)::int AS n FROM bank_statement_lines WHERE bank_account_id = $1 GROUP BY status`, [bankAccountId])).rows;
+    const last = (await this.db.query<{ balance: string | null; txn_date: string }>(`SELECT balance, txn_date FROM bank_statement_lines WHERE bank_account_id = $1 AND organization_id = $2 AND balance IS NOT NULL ORDER BY txn_date DESC, id DESC LIMIT 1`, [bankAccountId, a.orgId])).rows[0];
+    const counts = (await this.db.query<{ status: string; n: number }>(`SELECT status, count(*)::int AS n FROM bank_statement_lines WHERE bank_account_id = $1 AND organization_id = $2 GROUP BY status`, [bankAccountId, a.orgId])).rows;
     return { bookBalance: fromPaise(toPaise(book)), statementBalance: last?.balance ?? null, statementDate: last?.txn_date ?? null, counts: Object.fromEntries(counts.map((c) => [c.status, c.n])) };
   }
 }

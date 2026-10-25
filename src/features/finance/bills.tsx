@@ -69,7 +69,9 @@ export function BillsView() {
 
 function BillDialog({ kind, vendors, onClose }: { kind: "bill" | "expense"; vendors: Vendor[]; onClose: () => void }) {
   const [v, setV] = useState({ vendorId: "", vendorBillNo: "", billDate: today(), dueDate: "", description: "", expenseAccountId: "", taxable: "", gstRate: "18", interState: false, itcEligible: true, tdsSection: "", tdsAmount: "0", paidFromAccountId: "" });
-  const m = useApiMutation("POST", "/bills", { invalidate: [["bills"], ["vendors"], ["finance"]], success: kind === "bill" ? "Bill recorded" : "Expense recorded" });
+  // One key per open form: a double-click or retry replays instead of posting twice.
+  const [idemKey] = useState(() => `bill-${crypto.randomUUID()}`);
+  const m = useApiMutation("POST", "/bills", { invalidate: [["bills"], ["vendors"], ["finance"]], success: kind === "bill" ? "Bill recorded" : "Expense recorded", headers: () => ({ "Idempotency-Key": idemKey }) });
   const set = (k: string, val: unknown) => setV((s) => ({ ...s, [k]: val }));
   const gst = (Number(v.taxable) || 0) * (Number(v.gstRate) || 0) / 100;
   return (

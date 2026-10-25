@@ -95,15 +95,16 @@ async function fire(deps: Deps, rule: Rule, dedupeKey: string, s: Subject) {
 }
 
 /** One worker pass: domain events → rules, scheduled scans, housekeeping and outbox delivery. */
-export async function runWorkerOnce(deps: Deps) {
+export async function runWorkerOnce(deps: Deps, onlyOrgId?: string) {
   const db = deps.db;
   const today = todayIst(deps.now());
   const stats = { events: 0, fired: 0, scheduled: 0, expiredQuotes: 0, outbox: 0 };
-  const rules = (await db.query<Rule>(`SELECT * FROM automation_rules WHERE enabled`)).rows;
+  // run-now from the UI is scoped to the caller's organisation; the background worker passes no org.
+  const rules = (await db.query<Rule>(`SELECT * FROM automation_rules WHERE enabled AND ($1::uuid IS NULL OR organization_id = $1)`, [onlyOrgId ?? null])).rows;
   const byTrigger = (org: string, t: string) => rules.filter((r) => r.organization_id === org && r.trigger === t);
 
   const events = (await db.query<{ id: string; organization_id: string; type: string; entity_type: string; entity_id: string | null; payload: Record<string, unknown>; occurred_at: Date }>(
-    `SELECT * FROM domain_events WHERE processed_at IS NULL ORDER BY id LIMIT 200`)).rows;
+    `SELECT * FROM domain_events WHERE processed_at IS NULL AND ($1::uuid IS NULL OR organization_id = $1) ORDER BY id LIMIT 200`, [onlyOrgId ?? null])).rows;
   for (const ev of events) {
     // A rule only reacts to events that happened after it was created (no surprise back-fill).
     for (const rule of byTrigger(ev.organization_id, ev.type).filter((r) => new Date(r.created_at) <= new Date(ev.occurred_at))) {
@@ -133,12 +134,20 @@ export async function runWorkerOnce(deps: Deps) {
     }
   }
 
-  stats.expiredQuotes = await db.tx((q) => QuotationService.expire(q, today));
-  await db.tx((q) => SubscriptionService.scan(q, today));
+  // Cross-organisation housekeeping runs only in the background worker.
+  if (!onlyOrgId) {
+    stats.expiredQuotes = await db.tx((q) => QuotationService.expire(q, today));
+    await db.tx((q) => SubscriptionService.scan(q, today));
+  }
 
   // Outbox delivery through the configured provider; without one, messages are marked blocked (visible to admins).
+  // Claim a batch atomically (lease by pushing next_attempt_at forward) so two workers — or the
+  // background worker and a manual run — can never send the same message twice.
   const pending = (await db.query<{ id: string; channel: "email" | "sms"; recipient: string; template: string; payload: Record<string, unknown>; attempts: number }>(
-    `SELECT * FROM outbox_messages WHERE status = 'pending' AND next_attempt_at <= now() ORDER BY created_at LIMIT 50`)).rows;
+    `UPDATE outbox_messages SET next_attempt_at = now() + interval '10 minutes'
+      WHERE id IN (SELECT id FROM outbox_messages WHERE status = 'pending' AND next_attempt_at <= now() AND ($1::uuid IS NULL OR organization_id = $1)
+                    ORDER BY created_at LIMIT 50 FOR UPDATE SKIP LOCKED)
+      RETURNING *`, [onlyOrgId ?? null])).rows;
   for (const m of pending) {
     try {
       const ok = await deps.messages.send({ channel: m.channel, recipient: m.recipient, template: m.template, payload: m.payload });
@@ -205,6 +214,6 @@ export class AutomationService {
   async runNow(a: Actor) {
     need(a, "automations.manage");
     if (!a.permissions.has("settings.manage") && !a.roles.includes("founder")) throw conflict("Only admins can trigger the worker manually.");
-    return runWorkerOnce(this.deps);
+    return runWorkerOnce(this.deps, a.orgId);
   }
 }

@@ -60,10 +60,10 @@ export class PayablesService {
   }
 
   /** Records a bill (owed to a vendor) or an expense (already paid) and posts it. */
-  async create(a: Actor, body: unknown) {
+  async create(a: Actor, body: unknown, idempotencyKey: string | undefined) {
     need(a, "finance.bill.manage");
     const d = parse(BillInputSchema, body);
-    const id = await this.db.tx(async (q) => {
+    const id = await this.db.tx((q) => idempotent(q, a.orgId, "bill.create", idempotencyKey, d, async () => {
       const exp = (await q.query<{ type: string; active: boolean }>(`SELECT type, active FROM accounts WHERE id = $1 AND organization_id = $2`, [d.expenseAccountId, a.orgId])).rows[0];
       if (!exp || !exp.active || !["expense", "asset"].includes(exp.type)) throw invalid("Pick an expense (or asset) account.", { expenseAccountId: ["Not an expense account"] });
       let vendor: { name: string } | undefined;
@@ -105,7 +105,7 @@ export class PayablesService {
       ).catch((e) => { if ((e as { code?: string }).code === "23505") throw conflict("This vendor bill number is already recorded."); throw e; });
       await audit(q, a, `${d.kind}.record`, "bill", r.rows[0].id, { number, total: fromPaise(total) });
       return r.rows[0].id;
-    });
+    }));
     return this.get(a, id);
   }
 

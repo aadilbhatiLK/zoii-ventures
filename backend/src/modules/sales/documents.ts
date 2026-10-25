@@ -4,7 +4,7 @@ import type { Queryable } from "../../db";
 import { type Actor, type Deps, audit, emit, fyCode, need, nextNumber } from "../../lib/context";
 import { conflict, forbidden, invalid, notFound, parse } from "../../lib/errors";
 import { iso, isUuid, likeTerm } from "../../lib/query";
-import { cancelPendingApproval, registerApprovalHandler, requestApproval } from "./approvals";
+import { cancelPendingApproval, recordEditor, registerApprovalHandler, requestApproval } from "./approvals";
 
 interface DocRow { id: string; number: string; kind: DocumentSummary["kind"]; title: string; client_id: string | null; client_name: string | null; lead_id: string | null; owner_id: string; approved_version: number | null; latest_version: number; latest_status: DocumentVersion["status"]; updated_at: Date }
 interface VerRow { id: string; document_id: string; version: number; status: DocumentVersion["status"]; content: string; content_sha256: string | null; change_summary: string | null; author_id: string; submitted_at: Date | null; decided_by: string | null; decided_at: Date | null; decision_note: string | null; updated_at: Date }
@@ -98,6 +98,7 @@ export class DocumentService {
       if (v.status !== "draft") throw conflict(v.status === "in_review" ? "This version is in review. Withdraw it to edit." : "Start a new version to make changes.");
       if (d.expectedUpdatedAt && iso(v.updated_at) !== new Date(d.expectedUpdatedAt).toISOString()) throw conflict("Someone else saved this draft after you opened it. Reload and retry.");
       await q.query(`UPDATE document_versions SET content = $2, change_summary = coalesce($3, change_summary) WHERE id = $1`, [v.id, d.content, d.changeSummary ?? null]);
+      await recordEditor(q, a, "document_version", v.id);
       await q.query(`UPDATE documents SET updated_at = now() WHERE id = $1`, [id]);
     });
     return this.get(a, id);

@@ -120,21 +120,27 @@ export class ProjectService {
     };
   }
 
+  /** A project's sales order and scope document must belong to the project's client. */
+  private async checkLinks(q: Queryable, a: Actor, clientId: string, salesOrderId: string | null | undefined, scopeDocumentId: string | null | undefined) {
+    const d = { clientId, salesOrderId, scopeDocumentId };
+    if (d.salesOrderId) {
+      const so = (await q.query<{ client_id: string }>(`SELECT client_id FROM sales_orders WHERE id = $1 AND organization_id = $2`, [d.salesOrderId, a.orgId])).rows[0];
+      if (!so) throw invalid("Unknown sales order.", { salesOrderId: ["Unknown"] });
+      if (so.client_id !== d.clientId) throw invalid("The sales order belongs to another client.", { salesOrderId: ["Different client"] });
+    }
+    if (d.scopeDocumentId) {
+      const doc = (await q.query<{ client_id: string | null }>(`SELECT client_id FROM documents WHERE id = $1 AND organization_id = $2`, [d.scopeDocumentId, a.orgId])).rows[0];
+      if (!doc) throw invalid("Unknown document.", { scopeDocumentId: ["Unknown"] });
+      if (doc.client_id && doc.client_id !== d.clientId) throw invalid("The scope document belongs to another client.", { scopeDocumentId: ["Different client"] });
+    }
+  }
+
   async create(a: Actor, body: unknown) {
     need(a, "projects.manage", "projects.activate");
     const d = parse(ProjectCreateSchema, body);
     const id = await this.db.tx(async (q) => {
       if (!(await q.query(`SELECT 1 FROM clients WHERE id = $1 AND organization_id = $2`, [d.clientId, a.orgId])).rows.length) throw invalid("Unknown client.", { clientId: ["Unknown"] });
-      if (d.salesOrderId) {
-        const so = (await q.query<{ client_id: string }>(`SELECT client_id FROM sales_orders WHERE id = $1 AND organization_id = $2`, [d.salesOrderId, a.orgId])).rows[0];
-        if (!so) throw invalid("Unknown sales order.", { salesOrderId: ["Unknown"] });
-        if (so.client_id !== d.clientId) throw invalid("The sales order belongs to another client.", { salesOrderId: ["Different client"] });
-      }
-      if (d.scopeDocumentId) {
-        const doc = (await q.query<{ client_id: string | null }>(`SELECT client_id FROM documents WHERE id = $1 AND organization_id = $2`, [d.scopeDocumentId, a.orgId])).rows[0];
-        if (!doc) throw invalid("Unknown document.", { scopeDocumentId: ["Unknown"] });
-        if (doc.client_id && doc.client_id !== d.clientId) throw invalid("The scope document belongs to another client.", { scopeDocumentId: ["Different client"] });
-      }
+      await this.checkLinks(q, a, d.clientId, d.salesOrderId, d.scopeDocumentId);
       const n = await nextNumber(q, a.orgId, "project");
       const r = await q.query<{ id: string }>(
         `INSERT INTO projects (organization_id, code, name, client_id, sales_order_id, scope_document_id, billable, manager_id, start_date, due_date, created_by)
@@ -163,6 +169,10 @@ export class ProjectService {
         }
       }
       if (d.salesOrderId !== undefined && p.status !== "planned") throw conflict("The sales order can only change before activation.");
+      // Activation was checked against the approved scope; it can't be swapped afterwards.
+      if (d.scopeDocumentId !== undefined && p.status !== "planned") throw conflict("The scope document can only change before activation. Use a change request.");
+      if (d.salesOrderId !== undefined || d.scopeDocumentId !== undefined)
+        await this.checkLinks(q, a, p.client_id, d.salesOrderId !== undefined ? d.salesOrderId : null, d.scopeDocumentId !== undefined ? d.scopeDocumentId : null);
       await q.query(
         `UPDATE projects SET name = coalesce($2, name), manager_id = coalesce($3, manager_id), start_date = CASE WHEN $4 THEN $5::date ELSE start_date END,
                 due_date = CASE WHEN $6 THEN $7::date ELSE due_date END, status = coalesce($8, status),
@@ -216,8 +226,8 @@ export class ProjectService {
     if (!isUuid(id)) throw notFound("Milestone");
     const m = (await q.query<{ id: string; project_id: string; status: Milestone["status"]; name: string; amount: string }>(`SELECT id, project_id, status, name, amount FROM milestones WHERE id = $1 AND organization_id = $2 FOR UPDATE`, [id, a.orgId])).rows[0];
     if (!m) throw notFound("Milestone");
-    await this.prow(q, a, m.project_id);
-    return m;
+    const p = await this.prow(q, a, m.project_id);
+    return { ...m, project_status: p.status };
   }
 
   async setMilestoneStatus(a: Actor, id: string, body: unknown) {
@@ -240,6 +250,7 @@ export class ProjectService {
     const d = parse(UatInputSchema, body);
     const pid = await this.db.tx(async (q) => {
       const m = await this.milestone(q, a, milestoneId);
+      if (!["active", "on_hold"].includes(m.project_status)) throw conflict(`UAT can't be added to a ${m.project_status} project.`);
       if (["signed_off", "invoiced"].includes(m.status)) throw conflict("This milestone is signed off.");
       await q.query(`INSERT INTO uat_items (organization_id, project_id, milestone_id, title, expected_result, updated_by) VALUES ($1,$2,$3,$4,$5,$6)`, [a.orgId, m.project_id, milestoneId, d.title, d.expectedResult ?? null, a.userId]);
       return m.project_id;
@@ -270,6 +281,7 @@ export class ProjectService {
     const d = parse(SignoffInputSchema, body);
     const pid = await this.db.tx(async (q) => {
       const m = await this.milestone(q, a, milestoneId);
+      if (!["active", "on_hold"].includes(m.project_status)) throw conflict(`Milestones of a ${m.project_status} project can't be signed off.`);
       if (["signed_off", "invoiced"].includes(m.status)) throw conflict("Already signed off.");
       const uat = (await q.query<{ status: string }>(`SELECT status FROM uat_items WHERE milestone_id = $1`, [milestoneId])).rows;
       if (!uat.length) throw conflict("Add UAT checks and record their results before sign-off.");

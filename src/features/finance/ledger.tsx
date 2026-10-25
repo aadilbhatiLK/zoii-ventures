@@ -123,7 +123,9 @@ function JournalDialog({ onClose }: { onClose: () => void }) {
   const [date, setDate] = useState(today());
   const [memo, setMemo] = useState("");
   const [lines, setLines] = useState([{ accountId: "", debit: "", credit: "" }, { accountId: "", debit: "", credit: "" }]);
-  const m = useApiMutation("POST", "/finance/journals", { invalidate: [["finance"]], success: "Entry posted" });
+  // One key per open form: a double-click or retry replays instead of posting twice.
+  const [idemKey] = useState(() => `jv-${crypto.randomUUID()}`);
+  const m = useApiMutation("POST", "/finance/journals", { invalidate: [["finance"]], success: "Entry posted", headers: () => ({ "Idempotency-Key": idemKey }) });
   const tot = (k: "debit" | "credit") => { try { return sum(lines.map((l) => toPaise(l[k] || "0"))); } catch { return -1n; } };
   const dr = tot("debit"), cr = tot("credit");
   const set = (i: number, k: string, v: string) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, [k]: v } : l)));

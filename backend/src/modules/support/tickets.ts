@@ -54,6 +54,7 @@ export class TicketService {
     const id = await this.db.tx(async (q) => {
       if (!(await q.query(`SELECT 1 FROM clients WHERE id = $1 AND organization_id = $2`, [d.clientId, a.orgId])).rows.length) throw invalid("Unknown client.", { clientId: ["Unknown"] });
       if (d.projectId && !(await q.query(`SELECT 1 FROM projects WHERE id = $1 AND client_id = $2`, [d.projectId, d.clientId])).rows.length) throw invalid("That project belongs to another client.", { projectId: ["Mismatch"] });
+      if (d.subscriptionId && !(await q.query(`SELECT 1 FROM subscriptions WHERE id = $1 AND client_id = $2 AND organization_id = $3`, [d.subscriptionId, d.clientId, a.orgId])).rows.length) throw invalid("That subscription belongs to another client.", { subscriptionId: ["Mismatch"] });
       const sla = (await q.query<{ first_response_minutes: number; resolution_minutes: number }>(`SELECT * FROM sla_policies WHERE organization_id = $1 AND priority = $2`, [a.orgId, d.priority])).rows[0];
       if (!sla) throw conflict("No SLA policy for this priority. Ask an admin to configure SLAs.");
       const now = this.deps.now();
@@ -86,6 +87,7 @@ export class TicketService {
       let firstDue = t.first_response_due_at, resDue = t.resolution_due_at;
       if (d.priority && d.priority !== t.priority) {
         const sla = (await q.query<{ first_response_minutes: number; resolution_minutes: number }>(`SELECT * FROM sla_policies WHERE organization_id = $1 AND priority = $2`, [a.orgId, d.priority])).rows[0];
+        if (!sla) throw conflict("No SLA policy for this priority. Ask an admin to configure SLAs.");
         firstDue = new Date(new Date(t.created_at).getTime() + sla.first_response_minutes * 60_000);
         resDue = new Date(new Date(t.created_at).getTime() + sla.resolution_minutes * 60_000);
       }
