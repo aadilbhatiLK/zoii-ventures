@@ -44,3 +44,8 @@ next-env.d.ts
 
 # e2e artefacts
 /tests/e2e/screenshots/
+
+# backend
+/backend/node_modules/
+/backend/dist/
+/backend/.data/

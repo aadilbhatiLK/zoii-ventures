@@ -140,6 +140,28 @@ export const DEMO_USERS: User[] = [
     avatarHue: 0,
     mfaEnrolled: true,
   },
+  {
+    id: "u_acct",
+    name: "Sonal Mehta",
+    email: "accounts@demo.zoii.in",
+    phone: "+91 90000 00011",
+    title: "Accountant",
+    roles: ["accountant"],
+    teamId: "t_finance",
+    avatarHue: 120,
+    mfaEnrolled: false,
+  },
+  {
+    id: "u_dev",
+    name: "Rohan Gehlot",
+    email: "dev@demo.zoii.in",
+    phone: "+91 90000 00012",
+    title: "Software Engineer",
+    roles: ["employee"],
+    teamId: "t_delivery",
+    avatarHue: 280,
+    mfaEnrolled: false,
+  },
 ];
 
 const COMPANIES: { name: string; city: string; product: ProductLine; industry: string }[] = [
