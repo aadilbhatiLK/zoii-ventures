@@ -8,19 +8,23 @@ PostgreSQL 16+. Migrations in `database/migrations` are plain SQL applied in fil
 - Every business table carries `organization_id` (single org today, multi-org ready).
 - `updated_at` maintained by trigger. Enumerations are `CHECK` constraints (or reference tables when users may extend them, e.g. `product_lines`).
 - Secrets never stored in plaintext: passwords as argon2id hashes, session tokens and OTPs as hashes.
-- `audit_events` is append-only (UPDATE/DELETE raise `42501`).
+- `audit_events` is append-only (UPDATE/DELETE raise `42501`); users are deactivated, never hard-deleted.
+- **Organisation integrity:** parent tables expose `UNIQUE (organization_id, id)` and every reference is a composite `(organization_id, x_id)` foreign key, so a row can never point at another organisation's user, client, lead or team. Child tables carry `organization_id` too, ready for row-level security.
 
 ## Implemented (Sprint 1 → applied in Sprint 2)
 
-| Migration | Tables |
-|---|---|
-| `0001_foundation.sql` | organizations, teams, users, permissions, roles, role_permissions, user_role_assignments, sessions, auth_challenges, audit_events, idempotency_keys |
-| `0002_crm.sql` | product_lines, clients, client_tax_profiles, client_addresses, client_contacts, client_product_lines, leads, lead_product_interests, activities, follow_ups |
-| `seeds/0001_permissions.sql` | permissions + 14 system roles, generated from the code registry |
+| Migration                    | Tables                                                                                                                                                      |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0001_foundation.sql`        | organizations, teams, users, permissions, roles, role_permissions, user_role_assignments, sessions, auth_challenges, audit_events, idempotency_keys         |
+| `0002_crm.sql`               | product_lines, clients, client_tax_profiles, client_addresses, client_contacts, client_product_lines, leads, lead_product_interests, activities, follow_ups |
+| `seeds/0001_permissions.sql` | permissions + 14 system roles, generated from the code registry                                                                                             |
 
 ### Key constraints (verified by `db:verify`)
 
-- Lead: value ≥ 0; `lost ⇔ lost_reason`; `client_id ⇒ stage = won`; closed leads have no follow-up date; unique code per org.
+- Lead: value ≥ 0; `lost ⇔ lost_reason`; `won ⇔ client_id` (won only through conversion); `won/lost ⇔ closed_at`; closed leads have no follow-up date; unique code per org.
+- A lead converts into at most one client (`UNIQUE (organization_id, source_lead_id)`).
+- Cross-organisation references are rejected (lead owner, account manager, contact parent, team membership).
+- Client website must be `http(s)://`.
 - Client tax profile: GSTIN format; GSTIN agrees with PAN and state code; registered types require a GSTIN; GSTIN unique per org. (Checksum is verified in the app layer.)
 - One primary contact per client; one default address per kind; 6-digit PIN.
 - Activity belongs to exactly one parent (lead or client).

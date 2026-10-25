@@ -12,17 +12,17 @@ Browser ──► Next.js (App Router, Vercel)
 
 ## Frontend layout
 
-| Path | Responsibility |
-|---|---|
-| `src/app` | Routes only. `(auth)` = sign-in screens, `(workspace)` = authenticated app shell. Pages are thin. |
-| `src/features/<module>` | Screens, dialogs and TanStack Query hooks per module (auth, dashboard, leads, clients, workspace). |
-| `src/components/ui` | Design-system primitives (Radix-based): button, inputs, dialog/sheet, menus, select, tabs, badge. |
-| `src/components/layout` | Shell: sidebar, topbar, breadcrumbs, command palette, global create sheets. |
-| `src/components/data-table` | Server-driven table (sorting, pagination, selection, resize, column visibility) + toolbar. |
-| `src/lib/api` | **Contracts** (zod schemas + types), `ApiClient` interface, HTTP adapter, errors, runtime factory. |
-| `src/lib/permissions` | Permission registry, role map, record-level access helpers. |
-| `src/lib/config/env.ts` | Runtime configuration guard (demo vs api, production latch). |
-| `src/lib/mock` | Demo seed + demo adapter. Never imported by production api mode at runtime. |
+| Path                        | Responsibility                                                                                     |
+| --------------------------- | -------------------------------------------------------------------------------------------------- |
+| `src/app`                   | Routes only. `(auth)` = sign-in screens, `(workspace)` = authenticated app shell. Pages are thin.  |
+| `src/features/<module>`     | Screens, dialogs and TanStack Query hooks per module (auth, dashboard, leads, clients, workspace). |
+| `src/components/ui`         | Design-system primitives (Radix-based): button, inputs, dialog/sheet, menus, select, tabs, badge.  |
+| `src/components/layout`     | Shell: sidebar, topbar, breadcrumbs, command palette, global create sheets.                        |
+| `src/components/data-table` | Server-driven table (sorting, pagination, selection, resize, column visibility) + toolbar.         |
+| `src/lib/api`               | **Contracts** (zod schemas + types), `ApiClient` interface, HTTP adapter, errors, runtime factory. |
+| `src/lib/permissions`       | Permission registry, role map, record-level access helpers.                                        |
+| `src/lib/config/env.ts`     | Runtime configuration guard (demo vs api, production latch).                                       |
+| `src/lib/mock`              | Demo seed + demo adapter. Never imported by production api mode at runtime.                        |
 
 Business logic (validation, authorization, scoring, money formatting) lives in `lib/` and is unit-tested; components only render and dispatch.
 

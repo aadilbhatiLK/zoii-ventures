@@ -8,7 +8,7 @@ import type {
   LeadListQuery,
   LeadStage,
   LogActivityInput,
-  User,
+  PublicUser,
 } from "@/lib/api/contracts";
 
 const api = () => getRuntime().api;
@@ -58,7 +58,7 @@ export function useUserDirectory() {
     queryFn: () => api().users.directory(),
     staleTime: 5 * 60_000,
   });
-  const byId = new Map<string, User>((q.data ?? []).map((u) => [u.id, u]));
+  const byId = new Map<string, PublicUser>((q.data ?? []).map((u) => [u.id, u]));
   return { ...q, byId };
 }
 
@@ -113,6 +113,18 @@ export function useChangeStage() {
       lostReason?: string;
     }) => api().leads.changeStage(id, stage, { lostReason }),
     onSuccess: (lead) => invalidate(lead.id),
+  });
+}
+
+export function useBulkChangeStage() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: ({ ids, stage }: { ids: string[]; stage: LeadStage }) =>
+      api().leads.bulkChangeStage(ids, stage),
+    onSuccess: (_, v) => {
+      invalidate();
+      v.ids.forEach((id) => invalidate(id));
+    },
   });
 }
 

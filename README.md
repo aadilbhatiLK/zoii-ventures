@@ -16,17 +16,17 @@ Open http://localhost:3000. The sign-in page lists the demo accounts (password `
 
 ## Scripts
 
-| Command | What it does |
-|---|---|
-| `npm run dev` | Development server (demo mode by default) |
-| `npm run build` / `start` | Production build / server |
-| `npm run typecheck` | Route type generation + `tsc --noEmit` |
-| `npm run lint` / `format` | ESLint / Prettier |
-| `npm test` | Unit + component tests (Vitest) |
-| `npm run db:verify` | Applies SQL migrations to in-process Postgres and checks constraints |
-| `npm run docs:rbac` | Regenerates `docs/rbac-matrix.md` and the permission seed from code |
-| `npm run e2e` | Browser smoke test against `BASE_URL` |
-| `npm run check` | typecheck + lint + test + db:verify + build |
+| Command                   | What it does                                                         |
+| ------------------------- | -------------------------------------------------------------------- |
+| `npm run dev`             | Development server (demo mode by default)                            |
+| `npm run build` / `start` | Production build / server                                            |
+| `npm run typecheck`       | Route type generation + `tsc --noEmit`                               |
+| `npm run lint` / `format` | ESLint / Prettier                                                    |
+| `npm test`                | Unit + component tests (Vitest)                                      |
+| `npm run db:verify`       | Applies SQL migrations to in-process Postgres and checks constraints |
+| `npm run docs:rbac`       | Regenerates `docs/rbac-matrix.md` and the permission seed from code  |
+| `npm run e2e`             | Browser smoke test against `BASE_URL`                                |
+| `npm run check`           | typecheck + lint + test + db:verify + build                          |
 
 ## What's in Sprint 1
 
@@ -52,10 +52,10 @@ Modules not built yet appear in the navigation with their sprint number and open
 
 ## Roadmap
 
-| Sprint | Scope |
-|---|---|
-| 2 | NestJS backend, Postgres, real auth (sessions, MFA, SMS OTP), CRM APIs, authorization tests, switch UI to api mode |
-| 3 | Product catalogue & pricing, discovery, BRD/PRD with versioned approvals, quotations + PDF |
-| 4 | Contracts/sales orders, subscriptions, projects, tasks, change requests, UAT, sign-off, AMC, client portal |
-| 5 | Double-entry ledger, invoices, receipts, expenses, banking & reconciliation, GST reports, P&L/BS/cash flow |
-| 6 | HR (employees, attendance, leave, payroll prep), support tickets & SLAs, automations |
+| Sprint | Scope                                                                                                              |
+| ------ | ------------------------------------------------------------------------------------------------------------------ |
+| 2      | NestJS backend, Postgres, real auth (sessions, MFA, SMS OTP), CRM APIs, authorization tests, switch UI to api mode |
+| 3      | Product catalogue & pricing, discovery, BRD/PRD with versioned approvals, quotations + PDF                         |
+| 4      | Contracts/sales orders, subscriptions, projects, tasks, change requests, UAT, sign-off, AMC, client portal         |
+| 5      | Double-entry ledger, invoices, receipts, expenses, banking & reconciliation, GST reports, P&L/BS/cash flow         |
+| 6      | HR (employees, attendance, leave, payroll prep), support tickets & SLAs, automations                               |

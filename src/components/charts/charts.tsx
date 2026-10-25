@@ -287,7 +287,13 @@ export function HorizontalBars({
               ) : null;
             }}
           />
-          <Bar dataKey="value" fill="var(--chart-1)" radius={[0, 4, 4, 0]} maxBarSize={18} isAnimationActive={!calm}>
+          <Bar
+            dataKey="value"
+            fill="var(--chart-1)"
+            radius={[0, 4, 4, 0]}
+            maxBarSize={18}
+            isAnimationActive={!calm}
+          >
             <LabelList
               dataKey="value"
               content={({ x, y, width, height: bh, index }) => {

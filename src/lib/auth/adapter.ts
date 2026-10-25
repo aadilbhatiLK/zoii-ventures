@@ -22,7 +22,8 @@ export interface AuthAdapter {
   signInWithPassword(email: string, password: string): Promise<SignInResult>;
   verifyMfa(challengeId: string, code: string): Promise<Session>;
   requestPhoneOtp(phone: string): Promise<OtpChallenge>;
-  verifyPhoneOtp(challengeId: string, code: string): Promise<Session>;
+  /** Privileged roles get `mfa_required`: an OTP alone never satisfies MFA. */
+  verifyPhoneOtp(challengeId: string, code: string): Promise<SignInResult>;
   /** Always resolves the same way whether or not the account exists (no enumeration). */
   requestPasswordReset(email: string): Promise<void>;
   signOut(): Promise<void>;

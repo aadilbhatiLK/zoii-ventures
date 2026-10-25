@@ -130,7 +130,9 @@ function ClientForm({
 
   const onSubmit = handleSubmit(async (values) => {
     try {
-      const saved = await save.mutateAsync(values);
+      const saved = await save.mutateAsync(
+        client ? { ...values, expectedUpdatedAt: client.updatedAt } : values,
+      );
       if (client) toast.success("Client updated");
       else
         toast.success(`Client ${saved.code} created`, {
@@ -331,8 +333,14 @@ function ClientForm({
                       aria-invalid={!!e.billingAddress?.pincode}
                     />
                   </Field>
-                  <Field label="Website" htmlFor="c-web">
-                    <Input id="c-web" placeholder="https://" {...register("website")} />
+                  <Field label="Website" htmlFor="c-web" error={e.website?.message}>
+                    <Input
+                      id="c-web"
+                      type="url"
+                      placeholder="https://"
+                      {...register("website")}
+                      aria-invalid={!!e.website}
+                    />
                   </Field>
                 </div>
               </section>

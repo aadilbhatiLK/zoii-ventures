@@ -2,11 +2,11 @@
 
 ## Environment variables
 
-| Variable | Required | Notes |
-|---|---|---|
-| `NEXT_PUBLIC_DATA_MODE` | **Yes in production** | `api` for real use. `demo` uses fictional in-browser data. Defaults to `demo` only in development. |
-| `NEXT_PUBLIC_API_BASE_URL` | When mode = `api` | Absolute `https://` URL of the backend (paths are `/api/v1/...`). |
-| `NEXT_PUBLIC_ALLOW_DEMO_IN_PRODUCTION` | Only for review builds | Must be exactly `true` for a production build to run in demo mode. A banner stays visible. |
+| Variable                               | Required               | Notes                                                                                              |
+| -------------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_DATA_MODE`                | **Yes in production**  | `api` for real use. `demo` uses fictional in-browser data. Defaults to `demo` only in development. |
+| `NEXT_PUBLIC_API_BASE_URL`             | When mode = `api`      | Absolute `https://` URL of the backend (paths are `/api/v1/...`).                                  |
+| `NEXT_PUBLIC_ALLOW_DEMO_IN_PRODUCTION` | Only for review builds | Must be exactly `true` for a production build to run in demo mode. A banner stays visible.         |
 
 All three are public (inlined into the browser bundle). Never add secrets with the `NEXT_PUBLIC_` prefix.
 
@@ -23,14 +23,14 @@ Vercel hosts only the frontend. It does not provide the backend API, PostgreSQL,
 
 ## Backend (Sprint 2 plan)
 
-| Piece | Suggested | Notes |
-|---|---|---|
-| API | NestJS on Azure App Service / Container Apps (or Render/Railway) | Same region as the database; health check endpoint |
-| Database | Managed PostgreSQL 16 (Azure Flexible Server / Neon / Supabase) | Private networking, PITR backups, separate migration role |
-| Jobs | BullMQ worker + Redis | Reminders, notifications, imports |
-| Files | Private blob storage | Signed, short-lived download URLs |
-| SMS/OTP | DLT-registered Indian SMS provider | Sender ID + template approval needed before go-live |
-| Monitoring | Sentry (or equivalent) + uptime checks | Alerts on auth failures and job errors |
+| Piece      | Suggested                                                        | Notes                                                     |
+| ---------- | ---------------------------------------------------------------- | --------------------------------------------------------- |
+| API        | NestJS on Azure App Service / Container Apps (or Render/Railway) | Same region as the database; health check endpoint        |
+| Database   | Managed PostgreSQL 16 (Azure Flexible Server / Neon / Supabase)  | Private networking, PITR backups, separate migration role |
+| Jobs       | BullMQ worker + Redis                                            | Reminders, notifications, imports                         |
+| Files      | Private blob storage                                             | Signed, short-lived download URLs                         |
+| SMS/OTP    | DLT-registered Indian SMS provider                               | Sender ID + template approval needed before go-live       |
+| Monitoring | Sentry (or equivalent) + uptime checks                           | Alerts on auth failures and job errors                    |
 
 ## Local development
 

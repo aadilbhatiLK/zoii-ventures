@@ -13,7 +13,7 @@ import {
   Users2,
   Handshake,
 } from "lucide-react";
-import type { Activity, ActivityType, User } from "@/lib/api/contracts";
+import type { Activity, ActivityType, PublicUser } from "@/lib/api/contracts";
 import { formatDateTime, formatRelative } from "@/lib/formatting";
 import { EmptyState } from "@/components/feedback/states";
 import { Skeleton } from "@/components/ui/misc";
@@ -43,7 +43,7 @@ export function ActivityTimeline({
   showEntity,
 }: {
   activities: Activity[] | undefined;
-  users: Map<string, User>;
+  users: Map<string, PublicUser>;
   loading?: boolean;
   showEntity?: boolean;
 }) {

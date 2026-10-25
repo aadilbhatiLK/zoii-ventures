@@ -123,6 +123,9 @@ export const UserSchema = z.object({
 });
 export type User = z.infer<typeof UserSchema>;
 
+/** Directory entry visible to every signed-in user — no contact details or security posture. */
+export type PublicUser = Pick<User, "id" | "name" | "title" | "roles" | "teamId" | "avatarHue">;
+
 export const SessionSchema = z.object({
   user: UserSchema,
   issuedAt: IsoDateTimeSchema,
@@ -150,6 +153,8 @@ export const LeadSchema = z.object({
   estimatedValue: MoneySchema,
   ownerId: z.string(),
   nextFollowUpAt: IsoDateTimeSchema.nullable(),
+  /** Set when the lead reaches won or lost; drives win-rate and "won this month". */
+  closedAt: IsoDateTimeSchema.nullable(),
   lostReason: z.string().nullable(),
   clientId: z.string().nullable(),
   notes: z.string().nullable(),
@@ -173,6 +178,8 @@ export const LeadInputSchema = z.object({
   ownerId: z.string().min(1, "Choose an owner"),
   nextFollowUpAt: IsoDateTimeSchema.nullable().optional(),
   notes: OptionalText(2000),
+  /** Optimistic concurrency: the updatedAt the editor started from. Mismatch → 409. */
+  expectedUpdatedAt: IsoDateTimeSchema.optional(),
 });
 export type LeadInput = z.input<typeof LeadInputSchema>;
 export type LeadInputParsed = z.output<typeof LeadInputSchema>;
@@ -328,7 +335,14 @@ export const ClientInputSchema = z.object({
   status: ClientSchema.shape.status,
   accountManagerId: z.string().min(1, "Choose an account manager"),
   gstin: GstinField,
-  website: OptionalText(200),
+  website: z
+    .union([
+      z.literal(""),
+      z.url({ protocol: /^https?$/, error: "Enter a full http(s) address" }).max(200),
+    ])
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  expectedUpdatedAt: IsoDateTimeSchema.optional(),
   billingAddress: z.object({
     line1: z.string().trim().min(3, "Address is required").max(200),
     line2: OptionalText(200),
@@ -375,6 +389,18 @@ export interface Paginated<T> {
   total: number;
   page: number;
   pageSize: number;
+}
+
+/** Lead pages also carry the summed value of ALL matching leads, not just this page. */
+export interface LeadPage extends Paginated<Lead> {
+  totalValue: Money;
+}
+
+export interface LeadExport {
+  rows: Lead[];
+  total: number;
+  /** True when more rows matched than the export limit. */
+  truncated: boolean;
 }
 
 export interface DashboardSummary {

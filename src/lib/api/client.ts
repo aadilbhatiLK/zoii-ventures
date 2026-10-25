@@ -7,6 +7,8 @@ import type {
   DashboardSummary,
   DuplicateCheckResult,
   Lead,
+  LeadExport,
+  LeadPage,
   LeadInput,
   LeadListQuery,
   LeadStage,
@@ -14,6 +16,7 @@ import type {
   Notification,
   Paginated,
   SearchResult,
+  PublicUser,
   User,
 } from "./contracts";
 import type { DataMode } from "@/lib/config/env";
@@ -28,11 +31,15 @@ export interface ApiClient {
   readonly mode: DataMode;
 
   leads: {
-    list(query: LeadListQuery): Promise<Paginated<Lead>>;
+    list(query: LeadListQuery): Promise<LeadPage>;
     get(id: string): Promise<Lead>;
     create(input: LeadInput): Promise<Lead>;
     update(id: string, input: LeadInput): Promise<Lead>;
     assign(ids: string[], ownerId: string): Promise<{ updated: number }>;
+    /** All-or-nothing. "won" is only reachable through convert; "lost" needs a per-lead reason. */
+    bulkChangeStage(ids: string[], stage: LeadStage): Promise<{ updated: number }>;
+    /** Requires leads.export; audited server-side. */
+    export(query: LeadListQuery): Promise<LeadExport>;
     changeStage(id: string, stage: LeadStage, opts?: { lostReason?: string }): Promise<Lead>;
     findDuplicates(
       input: Pick<LeadInput, "phone" | "email" | "company">,
@@ -56,7 +63,7 @@ export interface ApiClient {
   users: {
     /** Users the current principal may assign records to. */
     assignable(): Promise<User[]>;
-    directory(): Promise<User[]>;
+    directory(): Promise<PublicUser[]>;
   };
 
   dashboard: { summary(): Promise<DashboardSummary> };

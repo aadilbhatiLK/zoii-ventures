@@ -89,8 +89,8 @@ await rejects("rejects unknown stages", `UPDATE leads SET stage = 'maybe' WHERE 
 ]);
 await rejects(
   "rejects unknown product lines",
-  `INSERT INTO lead_product_interests VALUES ($1, 'spaceships')`,
-  [lead.id],
+  `INSERT INTO lead_product_interests (organization_id, lead_id, product_line) VALUES ($1, $2, 'spaceships')`,
+  [org.id, lead.id],
 );
 
 const client = await one(
@@ -102,11 +102,60 @@ await rejects(
   `UPDATE leads SET client_id = $2 WHERE id = $1`,
   [lead.id, client.id],
 );
-await db.query(`UPDATE leads SET stage = 'won', client_id = $2 WHERE id = $1`, [
+await rejects(
+  "won is only reachable with a client (conversion)",
+  `UPDATE leads SET stage = 'won', closed_at = now() WHERE id = $1`,
+  [lead.id],
+);
+await rejects(
+  "closed leads need closed_at",
+  `UPDATE leads SET stage = 'won', client_id = $2 WHERE id = $1`,
+  [lead.id, client.id],
+);
+await db.query(`UPDATE leads SET stage = 'won', client_id = $2, closed_at = now() WHERE id = $1`, [
   lead.id,
   client.id,
 ]);
 ok("won lead links to its client");
+await rejects(
+  "one lead converts into at most one client",
+  `INSERT INTO clients (organization_id, code, display_name, legal_name, industry, category, account_manager_id, source_lead_id) VALUES ($1, 'CL-2', 'Dup', 'Dup', 'Retail', 'smb', $2, $3)`,
+  [org.id, u.id, lead.id],
+);
+await rejects(
+  "client website must be an http(s) URL",
+  `UPDATE clients SET website = 'javascript:alert(1)' WHERE id = $1`,
+  [client.id],
+);
+
+// Cross-organisation references are impossible with composite FKs.
+const org2 = await one(
+  `INSERT INTO organizations (name, legal_name) VALUES ('Other Org', 'Other Org') RETURNING id`,
+);
+const u2 = await one(
+  `INSERT INTO users (organization_id, email, full_name, status) VALUES ($1, 'x@other.in', 'X', 'active') RETURNING id`,
+  [org2.id],
+);
+await rejects(
+  "a lead cannot be owned by another organisation's user",
+  `INSERT INTO leads (organization_id, code, contact_name, phone, source, estimated_value, owner_id) VALUES ($1, 'LD-9', 'X Y', '9', 'website', 1, $2)`,
+  [org.id, u2.id],
+);
+await rejects(
+  "a client cannot be managed by another organisation's user",
+  `INSERT INTO clients (organization_id, code, display_name, legal_name, industry, category, account_manager_id) VALUES ($1, 'CL-9', 'Cross', 'Cross', 'Retail', 'smb', $2)`,
+  [org.id, u2.id],
+);
+await rejects(
+  "a contact cannot attach to another organisation's client",
+  `INSERT INTO client_contacts (organization_id, client_id, name, phone) VALUES ($1, $2, 'Spy', '9999999999')`,
+  [org2.id, client.id],
+);
+await rejects(
+  "a user cannot join another organisation's team",
+  `INSERT INTO users (organization_id, team_id, email, full_name) VALUES ($1, $2, 'y@other.in', 'Y')`,
+  [org2.id, team.id],
+);
 
 await rejects(
   "GSTIN format is enforced",
@@ -130,17 +179,17 @@ await db.query(
 ok("valid tax profile accepted");
 await rejects(
   "PIN code must be 6 digits",
-  `INSERT INTO client_addresses (client_id, kind, line1, city, state, pincode) VALUES ($1, 'billing', 'x', 'Bikaner', 'Rajasthan', '01234')`,
-  [client.id],
+  `INSERT INTO client_addresses (organization_id, client_id, kind, line1, city, state, pincode) VALUES ($1, $2, 'billing', 'x', 'Bikaner', 'Rajasthan', '01234')`,
+  [org.id, client.id],
 );
 await db.query(
-  `INSERT INTO client_contacts (client_id, name, phone, is_primary) VALUES ($1, 'Asha', '9829012345', true)`,
-  [client.id],
+  `INSERT INTO client_contacts (organization_id, client_id, name, phone, is_primary) VALUES ($1, $2, 'Asha', '9829012345', true)`,
+  [org.id, client.id],
 );
 await rejects(
   "only one primary contact per client",
-  `INSERT INTO client_contacts (client_id, name, phone, is_primary) VALUES ($1, 'Second', '9829012346', true)`,
-  [client.id],
+  `INSERT INTO client_contacts (organization_id, client_id, name, phone, is_primary) VALUES ($1, $2, 'Second', '9829012346', true)`,
+  [org.id, client.id],
 );
 await rejects(
   "activity must belong to exactly one parent",
@@ -148,13 +197,13 @@ await rejects(
   [org.id, lead.id, client.id],
 );
 await db.query(
-  `INSERT INTO follow_ups (lead_id, assigned_to, due_at) VALUES ($1, $2, now() + interval '1 day')`,
-  [lead.id, u.id],
+  `INSERT INTO follow_ups (organization_id, lead_id, assigned_to, due_at) VALUES ($1, $2, $3, now() + interval '1 day')`,
+  [org.id, lead.id, u.id],
 );
 await rejects(
   "only one open follow-up per lead",
-  `INSERT INTO follow_ups (lead_id, assigned_to, due_at) VALUES ($1, $2, now())`,
-  [lead.id, u.id],
+  `INSERT INTO follow_ups (organization_id, lead_id, assigned_to, due_at) VALUES ($1, $2, $3, now())`,
+  [org.id, lead.id, u.id],
 );
 await rejects(
   "completed follow-ups need an outcome",

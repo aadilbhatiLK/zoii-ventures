@@ -20,7 +20,8 @@ Legend: [x] done and verified · [~] partial · [ ] not started
 - [x] Planned modules route to an honest roadmap page (no fake screens)
 - [x] PWA: manifest, icons, service worker (static + offline only), offline page
 - [x] SQL migrations 0001/0002 + permission seed, verified on PGlite
-- [x] Tests: 54 unit/component, 21-step browser e2e; docs set
+- [x] Tests: 77 unit/component (incl. review regressions), 34 migration checks, 21-step browser e2e; docs set
+- [x] Independent security/correctness review: 18 findings fixed or documented (see docs/security-baseline.md)
 - [ ] Vercel preview deployment — needs repository + Vercel access
 
 ## Sprint 2 — Backend & real CRM

@@ -58,7 +58,8 @@ export function PipelineBoard() {
           meta: LEAD_STAGES[i]!,
           items,
           total: r.data?.total ?? 0,
-          value: items.reduce((s, l) => s + Number(l.estimatedValue), 0),
+          // Sum over every lead in the stage (server aggregate), not just the cards loaded.
+          value: Number(r.data?.totalValue ?? 0),
           loading: r.isLoading,
           error: r.error,
         };

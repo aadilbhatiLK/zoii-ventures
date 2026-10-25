@@ -242,7 +242,11 @@ export function LeadDetail({ leadId }: { leadId: string }) {
       <StageStepper
         lead={l}
         editable={editable}
-        onMove={(s) => void stageChanger.changeStage(l, s)}
+        onMove={(s) => {
+          if (s === "won" && can("leads.convert") && can("clients.create") && l.stage !== "lost")
+            setDialog("convert");
+          else void stageChanger.changeStage(l, s);
+        }}
       />
 
       {l.clientId && (

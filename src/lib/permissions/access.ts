@@ -73,3 +73,16 @@ export function canEditLead(
 ): boolean {
   return can(principal, "leads.update") && canViewLead(principal, lead, ownerTeamOf);
 }
+
+/** Roles whose sessions must be MFA-verified (policy shared by auth adapters and the app shell). */
+export const MFA_REQUIRED_ROLES: readonly Role[] = [
+  "super_admin",
+  "founder",
+  "finance_manager",
+  "hr_manager",
+  "auditor",
+];
+
+export function requiresMfa(principal: Pick<Principal, "roles"> | null | undefined): boolean {
+  return !!principal && principal.roles.some((r) => MFA_REQUIRED_ROLES.includes(r));
+}

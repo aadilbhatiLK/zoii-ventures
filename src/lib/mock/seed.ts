@@ -446,6 +446,7 @@ export function buildDemoSeed(now: Date = new Date()): DemoSeed {
       estimatedValue: `${value}.00`,
       ownerId,
       nextFollowUpAt,
+      closedAt: stage === "won" || stage === "lost" ? updatedAt : null,
       lostReason:
         stage === "lost"
           ? pick(["Budget", "Chose a competitor", "No response", "Timing / postponed"])
@@ -520,7 +521,7 @@ export function buildDemoSeed(now: Date = new Date()): DemoSeed {
   const managers = ["u_am", "u_am", "u_salesmgr"];
   let clientSeq = 0;
   for (const lead of leads.filter((l) => l.stage === "won")) {
-    if (rand() < 0.15) continue;
+    // Every won lead has a client: "won" is only reachable through conversion.
     clientSeq++;
     const id = `client_${String(clientSeq).padStart(3, "0")}`;
     const company = COMPANIES.find((c) => lead.company?.startsWith(c.name));

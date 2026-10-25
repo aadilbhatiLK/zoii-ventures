@@ -295,7 +295,13 @@ export function LoginForm() {
               className="space-y-4"
               onSubmit={(e) => {
                 e.preventDefault();
-                void run(() => auth.verifyPhoneOtp(otpChallenge.id, code));
+                void run(async () => {
+                  const r = await auth.verifyPhoneOtp(otpChallenge.id, code);
+                  if (r.status === "mfa_required") {
+                    setMfaChallenge(r.challengeId);
+                    setCode("");
+                  }
+                });
               }}
             >
               <p className="text-fg-muted text-[13px]">

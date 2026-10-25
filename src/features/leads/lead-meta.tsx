@@ -11,7 +11,7 @@ import {
   type LeadStage,
   type Priority,
   type ProductLine,
-  type User,
+  type PublicUser,
 } from "@/lib/api/contracts";
 import { dueState, formatDateTime, formatRelative } from "@/lib/formatting";
 import { cn } from "@/lib/utils";
@@ -68,7 +68,7 @@ export function ProductChips({ lines, max = 1 }: { lines: ProductLine[]; max?: n
   );
 }
 
-export function OwnerCell({ user }: { user: User | undefined }) {
+export function OwnerCell({ user }: { user: PublicUser | undefined }) {
   if (!user) return <span className="text-fg-subtle">—</span>;
   return (
     <span className="inline-flex min-w-0 items-center gap-2">

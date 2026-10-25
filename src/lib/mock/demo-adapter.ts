@@ -13,6 +13,7 @@ import {
   ConvertLeadInputSchema,
   LeadInputSchema,
   LeadListQuerySchema,
+  LeadStageSchema,
   ClientListQuerySchema,
   LogActivityInputSchema,
   OPEN_STAGES,
@@ -41,18 +42,18 @@ export interface AuditEvent {
 
 interface DemoState extends DemoSeed {
   audit: AuditEvent[];
-  readNotifications: string[];
+  readNotifications: Record<string, string[]>;
   seq: { lead: number; client: number; activity: number; audit: number };
 }
 
-const STORAGE_KEY = "zoii.demo.store.v1";
+const STORAGE_KEY = "zoii.demo.store.v2";
 
 function freshState(now: Date): DemoState {
   const seed = buildDemoSeed(now);
   return {
     ...seed,
     audit: [],
-    readNotifications: [],
+    readNotifications: {},
     seq: {
       lead: seed.leads.length,
       client: seed.clients.length,
@@ -196,6 +197,32 @@ export function createDemoApiClient(
           : 0;
     return Math.min(99, base + valueBonus + sourceBonus);
   };
+  const assertFresh = (current: string, expected: string | undefined) => {
+    if (expected && expected !== current) {
+      throw new ApiError(
+        {
+          code: "CONFLICT",
+          message:
+            "Someone else changed this record after you opened it. Reload to see their changes, then try again.",
+        },
+        409,
+      );
+    }
+  };
+  const closedStage = (stage: LeadStage) => stage === "won" || stage === "lost";
+  const parseWhen = (value: string, field: string): string => {
+    const t = Date.parse(value);
+    if (Number.isNaN(t))
+      throw new ApiError(
+        {
+          code: "VALIDATION",
+          message: "Pick a valid date.",
+          details: { [field]: ["Invalid date"] },
+        },
+        422,
+      );
+    return new Date(t).toISOString();
+  };
   const normPhone = (p: string) => p.replace(/\D/g, "").slice(-10);
   const normCompany = (c: string) =>
     c
@@ -205,6 +232,84 @@ export function createDemoApiClient(
 
   const sum = (xs: Lead[]) => xs.reduce((s, l) => s + Number(l.estimatedValue), 0);
   const money = (n: number) => `${Math.round(n)}.00`;
+
+  /** Scoped, filtered and sorted leads for a list query — shared by list and export. */
+  const queryLeads = (user: User, rawQuery: unknown) => {
+    if (leadScope(user) === "none")
+      throw new ApiError({ code: "FORBIDDEN", message: "You don't have access to leads." }, 403);
+    const parsedQ = LeadListQuerySchema.safeParse(rawQuery);
+    if (!parsedQ.success) throw ApiError.fromZod(parsedQ.error);
+    const q = parsedQ.data;
+    const today = now();
+    const dayStart = new Date(today);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart.getTime() + 86_400_000);
+    let rows = visibleLeads(user);
+
+    switch (q.view) {
+      case "mine":
+        rows = rows.filter((l) => l.ownerId === user.id);
+        break;
+      case "open":
+        rows = rows.filter((l) => OPEN_STAGES.includes(l.stage));
+        break;
+      case "due_today":
+        rows = rows.filter(
+          (l) =>
+            l.nextFollowUpAt &&
+            new Date(l.nextFollowUpAt) >= dayStart &&
+            new Date(l.nextFollowUpAt) < dayEnd,
+        );
+        break;
+      case "overdue":
+        rows = rows.filter(
+          (l) =>
+            l.nextFollowUpAt &&
+            new Date(l.nextFollowUpAt) < dayStart &&
+            OPEN_STAGES.includes(l.stage),
+        );
+        break;
+      case "hot":
+        rows = rows.filter(
+          (l) => OPEN_STAGES.includes(l.stage) && (l.priority === "high" || l.score >= 70),
+        );
+        break;
+    }
+    if (q.search) {
+      const term = q.search.toLowerCase();
+      const digits = term.replace(/\D/g, "");
+      rows = rows.filter(
+        (l) =>
+          l.name.toLowerCase().includes(term) ||
+          (l.company ?? "").toLowerCase().includes(term) ||
+          (l.email ?? "").includes(term) ||
+          l.code.toLowerCase().includes(term) ||
+          (l.city ?? "").toLowerCase().includes(term) ||
+          (digits.length >= 4 && l.phone.replace(/\D/g, "").includes(digits)),
+      );
+    }
+    if (q.stage?.length) rows = rows.filter((l) => q.stage!.includes(l.stage));
+    if (q.productLine?.length)
+      rows = rows.filter((l) => l.productInterest.some((p) => q.productLine!.includes(p)));
+    if (q.ownerId?.length) rows = rows.filter((l) => q.ownerId!.includes(l.ownerId));
+    if (q.source?.length) rows = rows.filter((l) => q.source!.includes(l.source));
+    if (q.priority?.length) rows = rows.filter((l) => q.priority!.includes(l.priority));
+
+    const sort = q.sort ?? { field: "createdAt", dir: "desc" as const };
+    const dir = sort.dir === "asc" ? 1 : -1;
+    rows = [...rows].sort((a, b) => {
+      const av = a[sort.field];
+      const bv = b[sort.field];
+      if (av === bv) return 0;
+      if (av === null) return 1; // nulls last regardless of direction
+      if (bv === null) return -1;
+      if (sort.field === "estimatedValue") return (Number(av) - Number(bv)) * dir;
+      if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
+      return String(av).localeCompare(String(bv)) * dir;
+    });
+
+    return { rows, q };
+  };
 
   const api: ApiClient & { __audit(): AuditEvent[]; __reset(): void } = {
     mode: "demo",
@@ -218,89 +323,37 @@ export function createDemoApiClient(
     leads: {
       async list(rawQuery) {
         await delay();
-        const user = requireUser();
-        if (leadScope(user) === "none")
-          throw new ApiError(
-            { code: "FORBIDDEN", message: "You don't have access to leads." },
-            403,
-          );
-        const parsedQ = LeadListQuerySchema.safeParse(rawQuery);
-        if (!parsedQ.success) throw ApiError.fromZod(parsedQ.error);
-        const q = parsedQ.data;
-        const today = now();
-        const dayStart = new Date(today);
-        dayStart.setHours(0, 0, 0, 0);
-        const dayEnd = new Date(dayStart.getTime() + 86_400_000);
-        let rows = visibleLeads(user);
-
-        switch (q.view) {
-          case "mine":
-            rows = rows.filter((l) => l.ownerId === user.id);
-            break;
-          case "open":
-            rows = rows.filter((l) => OPEN_STAGES.includes(l.stage));
-            break;
-          case "due_today":
-            rows = rows.filter(
-              (l) =>
-                l.nextFollowUpAt &&
-                new Date(l.nextFollowUpAt) >= dayStart &&
-                new Date(l.nextFollowUpAt) < dayEnd,
-            );
-            break;
-          case "overdue":
-            rows = rows.filter(
-              (l) =>
-                l.nextFollowUpAt &&
-                new Date(l.nextFollowUpAt) < dayStart &&
-                OPEN_STAGES.includes(l.stage),
-            );
-            break;
-          case "hot":
-            rows = rows.filter(
-              (l) => OPEN_STAGES.includes(l.stage) && (l.priority === "high" || l.score >= 70),
-            );
-            break;
-        }
-        if (q.search) {
-          const term = q.search.toLowerCase();
-          const digits = term.replace(/\D/g, "");
-          rows = rows.filter(
-            (l) =>
-              l.name.toLowerCase().includes(term) ||
-              (l.company ?? "").toLowerCase().includes(term) ||
-              (l.email ?? "").includes(term) ||
-              l.code.toLowerCase().includes(term) ||
-              (l.city ?? "").toLowerCase().includes(term) ||
-              (digits.length >= 4 && l.phone.replace(/\D/g, "").includes(digits)),
-          );
-        }
-        if (q.stage?.length) rows = rows.filter((l) => q.stage!.includes(l.stage));
-        if (q.productLine?.length)
-          rows = rows.filter((l) => l.productInterest.some((p) => q.productLine!.includes(p)));
-        if (q.ownerId?.length) rows = rows.filter((l) => q.ownerId!.includes(l.ownerId));
-        if (q.source?.length) rows = rows.filter((l) => q.source!.includes(l.source));
-        if (q.priority?.length) rows = rows.filter((l) => q.priority!.includes(l.priority));
-
-        const sort = q.sort ?? { field: "createdAt", dir: "desc" as const };
-        const dir = sort.dir === "asc" ? 1 : -1;
-        rows = [...rows].sort((a, b) => {
-          const av = a[sort.field];
-          const bv = b[sort.field];
-          if (av === bv) return 0;
-          if (av === null) return 1; // nulls last regardless of direction
-          if (bv === null) return -1;
-          if (sort.field === "estimatedValue") return (Number(av) - Number(bv)) * dir;
-          if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
-          return String(av).localeCompare(String(bv)) * dir;
-        });
-
+        const { rows, q } = queryLeads(requireUser(), rawQuery);
         const start = (q.page - 1) * q.pageSize;
         return {
           items: clone(rows.slice(start, start + q.pageSize)),
           total: rows.length,
           page: q.page,
           pageSize: q.pageSize,
+          totalValue: money(sum(rows)),
+        };
+      },
+
+      async export(rawQuery) {
+        await delay();
+        const user = requireUser();
+        requirePerm(user, "leads.export");
+        const { rows } = queryLeads(user, { ...(rawQuery as object), page: 1, pageSize: 50 });
+        const LIMIT = 5000;
+        state.audit.push({
+          id: `aud_${++state.seq.audit}`,
+          at: isoNow(),
+          actorId: user.id,
+          action: "lead.export",
+          entityType: "lead",
+          entityId: "*",
+          changes: { rows: { from: null, to: Math.min(rows.length, LIMIT) } },
+        });
+        save();
+        return {
+          rows: clone(rows.slice(0, LIMIT)),
+          total: rows.length,
+          truncated: rows.length > LIMIT,
         };
       },
 
@@ -341,6 +394,7 @@ export function createDemoApiClient(
           estimatedValue: data.estimatedValue,
           ownerId: data.ownerId,
           nextFollowUpAt: data.nextFollowUpAt ?? null,
+          closedAt: null,
           lostReason: null,
           clientId: null,
           notes: data.notes ?? null,
@@ -381,6 +435,13 @@ export function createDemoApiClient(
         const parsed = LeadInputSchema.safeParse(input);
         if (!parsed.success) throw ApiError.fromZod(parsed.error);
         const data = parsed.data;
+        assertFresh(lead.updatedAt, data.expectedUpdatedAt);
+        if (closedStage(lead.stage) && data.nextFollowUpAt) {
+          throw new ApiError(
+            { code: "CONFLICT", message: "Closed leads don't take follow-ups." },
+            409,
+          );
+        }
         if (data.ownerId !== lead.ownerId) {
           requirePerm(user, "leads.assign");
           if (!assignableUsers(user).some((u) => u.id === data.ownerId)) {
@@ -467,10 +528,23 @@ export function createDemoApiClient(
         return { updated };
       },
 
-      async changeStage(id, stage, extra) {
+      async changeStage(id, rawStage, extra) {
         await delay();
         const user = requireUser();
         const lead = findEditableLead(user, id);
+        const stageParsed = LeadStageSchema.safeParse(rawStage);
+        if (!stageParsed.success) throw ApiError.fromZod(stageParsed.error);
+        const stage = stageParsed.data;
+        if (stage === "won" && !lead.clientId) {
+          throw new ApiError(
+            {
+              code: "CONFLICT",
+              message:
+                "Use “Convert to client” to mark a lead as won, so the client record is created with it.",
+            },
+            409,
+          );
+        }
         if (stage === "lost" && !extra?.lostReason?.trim()) {
           throw new ApiError(
             {
@@ -490,7 +564,12 @@ export function createDemoApiClient(
         const before = clone(lead);
         lead.stage = stage;
         lead.lostReason = stage === "lost" ? extra!.lostReason!.trim() : null;
-        if (stage === "won" || stage === "lost") lead.nextFollowUpAt = null;
+        if (closedStage(stage)) lead.nextFollowUpAt = null;
+        lead.closedAt = closedStage(stage)
+          ? before.closedAt && closedStage(before.stage)
+            ? before.closedAt
+            : isoNow()
+          : null;
         lead.updatedAt = isoNow();
         addActivity({
           entityType: "lead",
@@ -506,9 +585,67 @@ export function createDemoApiClient(
         return clone(lead);
       },
 
+      async bulkChangeStage(ids, rawStage) {
+        await delay();
+        const user = requireUser();
+        const stageParsed = LeadStageSchema.safeParse(rawStage);
+        if (!stageParsed.success) throw ApiError.fromZod(stageParsed.error);
+        const stage = stageParsed.data;
+        if (closedStage(stage)) {
+          throw new ApiError(
+            {
+              code: "VALIDATION",
+              message:
+                "Won needs a conversion and Lost needs a reason, so move those one lead at a time.",
+            },
+            422,
+          );
+        }
+        // Validate every lead first; apply only if all pass.
+        const leads = ids.map((id) => findEditableLead(user, id));
+        const converted = leads.filter((l) => l.clientId);
+        if (converted.length) {
+          throw new ApiError(
+            {
+              code: "CONFLICT",
+              message: `${converted.map((l) => l.code).join(", ")} ${converted.length > 1 ? "are" : "is"} already converted. Deselect and retry.`,
+            },
+            409,
+          );
+        }
+        let updated = 0;
+        for (const lead of leads) {
+          if (lead.stage === stage) continue;
+          const before = clone(lead);
+          lead.stage = stage;
+          lead.lostReason = null;
+          lead.closedAt = null;
+          lead.updatedAt = isoNow();
+          addActivity({
+            entityType: "lead",
+            entityId: lead.id,
+            type: "stage_change",
+            summary: `Stage moved from ${stageMeta(before.stage).label} to ${stageMeta(stage).label}`,
+            body: null,
+            actorId: user.id,
+            meta: { from: before.stage, to: stage },
+          });
+          audit(user.id, "lead.stage", "lead", lead.id, before, lead);
+          updated++;
+        }
+        save();
+        return { updated };
+      },
+
       async findDuplicates(input, excludeId) {
         await delay();
         const user = requireUser();
+        if (!can(user, "leads.create") && !can(user, "leads.update")) {
+          throw new ApiError(
+            { code: "FORBIDDEN", message: "You don't have permission to do that." },
+            403,
+          );
+        }
         const phone = input.phone ? normPhone(input.phone) : "";
         const email = input.email ? input.email.trim().toLowerCase() : "";
         const company = input.company ? normCompany(input.company) : "";
@@ -580,10 +717,9 @@ export function createDemoApiClient(
             { code: "CONFLICT", message: "Closed leads don't take follow-ups." },
             409,
           );
-        if (Number.isNaN(Date.parse(at)))
-          throw new ApiError({ code: "VALIDATION", message: "Pick a valid date." }, 422);
+        const when = parseWhen(at, "at");
         const before = clone(lead);
-        lead.nextFollowUpAt = new Date(at).toISOString();
+        lead.nextFollowUpAt = when;
         lead.updatedAt = isoNow();
         addActivity({
           entityType: "lead",
@@ -612,8 +748,15 @@ export function createDemoApiClient(
             },
             422,
           );
+        if (nextAt && !OPEN_STAGES.includes(lead.stage)) {
+          throw new ApiError(
+            { code: "CONFLICT", message: "Closed leads don't take follow-ups." },
+            409,
+          );
+        }
+        const next = nextAt ? parseWhen(nextAt, "nextAt") : null;
         const before = clone(lead);
-        lead.nextFollowUpAt = nextAt ? new Date(nextAt).toISOString() : null;
+        lead.nextFollowUpAt = next;
         lead.updatedAt = isoNow();
         addActivity({
           entityType: "lead",
@@ -687,6 +830,7 @@ export function createDemoApiClient(
         lead.stage = "won";
         lead.clientId = client.id;
         lead.nextFollowUpAt = null;
+        lead.closedAt = ts;
         lead.updatedAt = ts;
         addActivity({
           entityType: "lead",
@@ -827,6 +971,7 @@ export function createDemoApiClient(
         const parsed = ClientInputSchema.safeParse(input);
         if (!parsed.success) throw ApiError.fromZod(parsed.error);
         const d = parsed.data;
+        assertFresh(client.updatedAt, d.expectedUpdatedAt);
         if (d.gstin && state.clients.some((c) => c.id !== id && c.gstin === d.gstin)) {
           throw new ApiError(
             {
@@ -905,7 +1050,15 @@ export function createDemoApiClient(
       async directory() {
         await delay();
         requireUser();
-        return clone(state.users);
+        // Public profile only: no email, phone or MFA status for other users.
+        return state.users.map((u) => ({
+          id: u.id,
+          name: u.name,
+          title: u.title,
+          roles: [...u.roles],
+          teamId: u.teamId,
+          avatarHue: u.avatarHue,
+        }));
       },
     },
 
@@ -924,13 +1077,10 @@ export function createDemoApiClient(
         dayStart.setHours(0, 0, 0, 0);
         const dayEnd = dayStart.getTime() + 86_400_000;
         const recent = leads.filter((l) => Date.parse(l.createdAt) >= d90);
-        const wonRecent = leads.filter((l) => l.stage === "won" && Date.parse(l.updatedAt) >= d90);
-        const lostRecent = leads.filter(
-          (l) => l.stage === "lost" && Date.parse(l.updatedAt) >= d90,
-        );
-        const wonMonth = leads.filter(
-          (l) => l.stage === "won" && Date.parse(l.updatedAt) >= monthStart,
-        );
+        const closedSince = (l: Lead, t0: number) => !!l.closedAt && Date.parse(l.closedAt) >= t0;
+        const wonRecent = leads.filter((l) => l.stage === "won" && closedSince(l, d90));
+        const lostRecent = leads.filter((l) => l.stage === "lost" && closedSince(l, d90));
+        const wonMonth = leads.filter((l) => l.stage === "won" && closedSince(l, monthStart));
         const productLines = new Map<string, { count: number; value: number }>();
         for (const l of open) {
           const share = Number(l.estimatedValue) / l.productInterest.length;
@@ -1105,7 +1255,7 @@ export function createDemoApiClient(
             Date.parse(a.occurredAt) >= weekAgo
           ) {
             const lead = state.leads.find((l) => l.id === a.entityId);
-            if (lead)
+            if (lead && lead.ownerId === user.id && OPEN_STAGES.includes(lead.stage))
               out.push({
                 id: `n_asg_${a.id}`,
                 kind: "assignment",
@@ -1117,7 +1267,7 @@ export function createDemoApiClient(
               });
           }
         }
-        const read = new Set(state.readNotifications);
+        const read = new Set(state.readNotifications[user.id] ?? []);
         return out
           .map((n) => ({ ...n, read: read.has(n.id) }))
           .sort((a, b) => Number(a.read) - Number(b.read) || b.createdAt.localeCompare(a.createdAt))
@@ -1125,8 +1275,10 @@ export function createDemoApiClient(
       },
       async markRead(ids) {
         await delay();
-        requireUser();
-        state.readNotifications = Array.from(new Set([...state.readNotifications, ...ids]));
+        const user = requireUser();
+        state.readNotifications[user.id] = Array.from(
+          new Set([...(state.readNotifications[user.id] ?? []), ...ids]),
+        );
         save();
       },
     },

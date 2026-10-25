@@ -24,7 +24,7 @@ interface AuthContextValue {
   signInWithPassword(email: string, password: string): Promise<SignInResult>;
   verifyMfa(challengeId: string, code: string): Promise<void>;
   requestPhoneOtp(phone: string): Promise<OtpChallenge>;
-  verifyPhoneOtp(challengeId: string, code: string): Promise<void>;
+  verifyPhoneOtp(challengeId: string, code: string): Promise<SignInResult>;
   requestPasswordReset(email: string): Promise<void>;
   signOut(reason?: "expired" | "user"): Promise<void>;
   switchPersona?: (userId: string) => Promise<void>;
@@ -112,7 +112,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
       requestPhoneOtp: (phone) => runtime.auth.requestPhoneOtp(phone),
       async verifyPhoneOtp(challengeId, code) {
-        start(await runtime.auth.verifyPhoneOtp(challengeId, code));
+        const result = await runtime.auth.verifyPhoneOtp(challengeId, code);
+        if (result.status === "ok") start(result.session);
+        return result;
       },
       requestPasswordReset: (email) => runtime.auth.requestPasswordReset(email),
       signOut,

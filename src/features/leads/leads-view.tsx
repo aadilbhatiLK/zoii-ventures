@@ -82,7 +82,7 @@ import { leadScope } from "@/lib/permissions";
 import { formatDate, formatINRCompact } from "@/lib/formatting";
 import { toCsv, downloadCsv } from "@/lib/csv";
 import { appConfig } from "@/lib/config/env";
-import { useLeadList, useUserDirectory, useChangeStage } from "./hooks";
+import { useLeadList, useUserDirectory, useBulkChangeStage } from "./hooks";
 import {
   FollowUpCell,
   OwnerCell,
@@ -194,7 +194,7 @@ export function LeadsView() {
   const [bulkStage, setBulkStage] = useState<LeadStage | null>(null);
   const [exporting, setExporting] = useState(false);
   const stageChanger = useStageChanger();
-  const changeStage = useChangeStage();
+  const bulkStageMutation = useBulkChangeStage();
 
   const query: LeadListQuery = useMemo(() => {
     const s = sorting[0];
@@ -382,7 +382,7 @@ export function LeadsView() {
                       <ArrowRightLeft /> Move to stage
                     </DropdownMenuSubTrigger>
                     <DropdownMenuSubContent className="w-44">
-                      {STAGE_OPTIONS.map((s) => (
+                      {STAGE_OPTIONS.filter((s) => s.value !== "won").map((s) => (
                         <DropdownMenuItem
                           key={s.value}
                           disabled={s.value === l.stage}
@@ -427,12 +427,7 @@ export function LeadsView() {
   const exportCsv = async () => {
     setExporting(true);
     try {
-      const rows: Lead[] = [];
-      for (let p = 1; p <= 40; p++) {
-        const r = await getRuntime().api.leads.list({ ...query, page: p, pageSize: 50 });
-        rows.push(...r.items);
-        if (rows.length >= r.total) break;
-      }
+      const { rows, total, truncated } = await getRuntime().api.leads.export(query);
       const csv = toCsv(
         [
           "Code",
@@ -474,6 +469,10 @@ export function LeadsView() {
       );
       downloadCsv(`zoii-leads-${new Date().toISOString().slice(0, 10)}.csv`, csv);
       toast.success(`Exported ${rows.length} leads`);
+      if (truncated)
+        toast.warning(
+          `Only the first ${rows.length} of ${total} matching leads were exported. Narrow the filters and export again.`,
+        );
     } catch (e) {
       toast.error(userMessage(e));
     } finally {
@@ -674,7 +673,7 @@ export function LeadsView() {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start">
                 <DropdownMenuLabel>Lost needs a reason — do it per lead</DropdownMenuLabel>
-                {STAGE_OPTIONS.filter((s) => s.value !== "lost").map((s) => (
+                {STAGE_OPTIONS.filter((s) => s.value !== "lost" && s.value !== "won").map((s) => (
                   <DropdownMenuItem key={s.value} onSelect={() => setBulkStage(s.value)}>
                     <span className={cn("size-2 rounded-full", STAGE_DOT[s.value])} /> {s.label}
                   </DropdownMenuItem>
@@ -708,6 +707,7 @@ export function LeadsView() {
         onSortingChange={(u) => {
           setSorting(u);
           setPage(1);
+          setSelection({});
         }}
         rowSelection={selection}
         onRowSelectionChange={setSelection}
@@ -764,23 +764,20 @@ export function LeadsView() {
         open={!!bulkStage}
         onOpenChange={(o) => !o && setBulkStage(null)}
         title={`Move ${selectedIds.length} leads to ${bulkStage ? stageMeta(bulkStage).label : ""}?`}
-        description="Each lead records the stage change in its history. Converted leads are skipped."
+        description="Applied to all selected leads or none: if any is already converted or outside your access, nothing changes. Each lead records the move in its history."
         confirmLabel="Move leads"
         onConfirm={async () => {
           const stage = bulkStage!;
           setBulkStage(null);
-          const results = await Promise.allSettled(
-            selectedIds.map((id) => changeStage.mutateAsync({ id, stage })),
-          );
-          const ok = results.filter((r) => r.status === "fulfilled").length;
-          const failed = results.length - ok;
-          if (ok)
-            toast.success(`${ok} lead${ok > 1 ? "s" : ""} moved to ${stageMeta(stage).label}`);
-          if (failed)
-            toast.error(
-              `${failed} lead${failed > 1 ? "s" : ""} couldn't be moved (converted or no access).`,
+          try {
+            const r = await bulkStageMutation.mutateAsync({ ids: selectedIds, stage });
+            toast.success(
+              `${r.updated} lead${r.updated === 1 ? "" : "s"} moved to ${stageMeta(stage).label}`,
             );
-          setSelection({});
+            setSelection({});
+          } catch (e) {
+            toast.error(userMessage(e));
+          }
         }}
       />
       <SaveViewDialog

@@ -1,6 +1,7 @@
 import type { Session, User } from "@/lib/api/contracts";
 import { ApiError } from "@/lib/api/errors";
 import { DEMO_OTP, DEMO_PASSWORD, DEMO_USERS } from "@/lib/mock/seed";
+import { requiresMfa } from "@/lib/permissions";
 import type { AuthAdapter, OtpChallenge, SignInResult } from "./adapter";
 
 const SESSION_KEY = "zoii.demo.session";
@@ -41,7 +42,9 @@ export function createDemoAuthAdapter(
         ? window.sessionStorage
         : null;
   const challenges = new Map<string, Challenge>();
-  const failures: number[] = [];
+  // Failures are tracked per identifier (email, phone or challenge), so one account's
+  // successful login never resets the limit for attacks on another.
+  const failures = new Map<string, number[]>();
   let memorySession: StoredSession | null = null;
 
   const read = (): StoredSession | null => {
@@ -82,18 +85,19 @@ export function createDemoAuthAdapter(
     write(stored);
     return toSession(stored)!;
   };
-  const guardRate = () => {
+  const guardRate = (key: string) => {
     const cutoff = now() - WINDOW_MS;
-    while (failures.length && failures[0]! < cutoff) failures.shift();
-    if (failures.length >= MAX_FAILURES) {
+    const list = (failures.get(key) ?? []).filter((t) => t >= cutoff);
+    failures.set(key, list);
+    if (list.length >= MAX_FAILURES) {
       throw new ApiError(
         { code: "RATE_LIMITED", message: "Too many attempts. Try again in a few minutes." },
         429,
       );
     }
   };
-  const fail = (message: string): never => {
-    failures.push(now());
+  const fail = (key: string, message: string): never => {
+    failures.set(key, [...(failures.get(key) ?? []), now()]);
     throw new ApiError({ code: "UNAUTHENTICATED", message }, 401);
   };
   const newChallenge = (userId: string, kind: Challenge["kind"]): Challenge => {
@@ -109,8 +113,9 @@ export function createDemoAuthAdapter(
     return c;
   };
   const consume = (challengeId: string, kind: Challenge["kind"], code: string): User => {
-    guardRate();
     const c = challenges.get(challengeId);
+    const key = `challenge:${c?.userId ?? challengeId}`;
+    guardRate(key);
     if (!c || c.kind !== kind || c.used || c.expiresAt < now()) {
       throw new ApiError(
         { code: "UNAUTHENTICATED", message: "This code has expired. Request a new one." },
@@ -125,19 +130,29 @@ export function createDemoAuthAdapter(
         429,
       );
     }
-    if (code.trim() !== DEMO_OTP) fail("That code is incorrect.");
+    // Unknown numbers go through the same expiry/attempt path and simply never match.
+    const user = DEMO_USERS.find((u) => u.id === c.userId);
+    if (!user || code.trim() !== DEMO_OTP) fail(key, "That code is incorrect.");
     c.used = true;
-    return DEMO_USERS.find((u) => u.id === c.userId)!;
+    return user!;
   };
-  const isPrivileged = (u: User) =>
-    u.roles.some(
-      (r) =>
-        r === "super_admin" ||
-        r === "founder" ||
-        r === "finance_manager" ||
-        r === "hr_manager" ||
-        r === "auditor",
-    );
+  /** Password or OTP is only the first factor for privileged roles. */
+  const firstFactorPassed = (user: User): SignInResult => {
+    if (requiresMfa(user)) {
+      if (!user.mfaEnrolled) {
+        throw new ApiError(
+          {
+            code: "FORBIDDEN",
+            message:
+              "Your role requires two-step verification. Ask an administrator to enrol you before signing in.",
+          },
+          403,
+        );
+      }
+      return { status: "mfa_required", challengeId: newChallenge(user.id, "mfa").id };
+    }
+    return { status: "ok", session: start(user, false) };
+  };
 
   return {
     mode: "demo",
@@ -151,21 +166,19 @@ export function createDemoAuthAdapter(
       return toSession(s);
     },
     async signInWithPassword(email, password): Promise<SignInResult> {
-      guardRate();
+      const key = `email:${email.trim().toLowerCase()}`;
+      guardRate(key);
       const user = DEMO_USERS.find((u) => u.email === email.trim().toLowerCase());
-      if (!user || password !== DEMO_PASSWORD) return fail("Email or password is incorrect.");
-      failures.length = 0;
-      if (isPrivileged(user) && user.mfaEnrolled) {
-        return { status: "mfa_required", challengeId: newChallenge(user.id, "mfa").id };
-      }
-      return { status: "ok", session: start(user, false) };
+      if (!user || password !== DEMO_PASSWORD) return fail(key, "Email or password is incorrect.");
+      failures.delete(key);
+      return firstFactorPassed(user);
     },
     async verifyMfa(challengeId, code) {
       return start(consume(challengeId, "mfa", code), true);
     },
     async requestPhoneOtp(phone): Promise<OtpChallenge> {
-      guardRate();
       const digits = phone.replace(/\D/g, "").slice(-10);
+      guardRate(`phone:${digits}`);
       const user = DEMO_USERS.find((u) => (u.phone ?? "").replace(/\D/g, "").slice(-10) === digits);
       // Same response whether or not the number exists; an unknown number simply never verifies.
       const c = newChallenge(user?.id ?? "__none__", "otp");
@@ -176,13 +189,10 @@ export function createDemoAuthAdapter(
       };
     },
     async verifyPhoneOtp(challengeId, code) {
-      const c = challenges.get(challengeId);
-      if (c?.userId === "__none__") return fail("That code is incorrect.");
-      const user = consume(challengeId, "otp", code);
-      return start(user, false);
+      return firstFactorPassed(consume(challengeId, "otp", code));
     },
-    async requestPasswordReset() {
-      guardRate();
+    async requestPasswordReset(email) {
+      guardRate(`reset:${email.trim().toLowerCase()}`);
     },
     async signOut() {
       write(null);

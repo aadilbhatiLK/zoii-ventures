@@ -157,7 +157,7 @@ function LeadForm({ lead, open, onClose }: { lead?: Lead; open: boolean; onClose
     }
     try {
       if (lead) {
-        await update.mutateAsync(values);
+        await update.mutateAsync({ ...values, expectedUpdatedAt: lead.updatedAt });
         toast.success("Lead updated");
       } else {
         const created = await create.mutateAsync(values);

@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Dialog as D } from "radix-ui";
 import { X } from "lucide-react";
 import { useAuth } from "@/features/auth/auth-provider";
+import { requiresMfa } from "@/lib/permissions";
 import { Skeleton } from "@/components/ui/misc";
 import { ZoiiWordmark } from "@/components/brand";
 import { Sidebar, SidebarNav } from "./sidebar";
@@ -59,7 +60,7 @@ function Hotkeys() {
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { status, signOut } = useAuth();
+  const { status, signOut, session } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   // Safe to read storage on first render: the shell body only renders client-side after auth resolves.
@@ -77,6 +78,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setMobileOpen(false);
   }
 
+  // Defence in depth: a privileged session that never passed MFA is not allowed in.
+  const mfaMissing =
+    status === "authenticated" && requiresMfa(session?.user) && !session?.mfaSatisfied;
+  useEffect(() => {
+    if (mfaMissing) void signOut("user");
+  }, [mfaMissing, signOut]);
+
   useEffect(() => {
     if (status === "unauthenticated") router.replace(`/login?next=${encodeURIComponent(pathname)}`);
   }, [status, router, pathname]);
@@ -87,7 +95,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("zoii:unauthenticated", onExpired);
   }, [signOut]);
 
-  if (status !== "authenticated") return <ShellSkeleton />;
+  if (status !== "authenticated" || mfaMissing) return <ShellSkeleton />;
 
   const toggle = () => {
     setCollapsed((c) => {

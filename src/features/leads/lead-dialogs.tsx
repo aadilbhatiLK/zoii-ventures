@@ -200,11 +200,18 @@ export function LostReasonDialog({
 
 /** Stage change that routes "lost" through the reason dialog. */
 export function useStageChanger() {
+  const router = useRouter();
   const change = useChangeStage();
   const [lostFor, setLostFor] = useState<Pick<Lead, "id" | "code"> | null>(null);
   const changeStage = async (lead: Pick<Lead, "id" | "code" | "stage">, stage: LeadStage) => {
     if (stage === lead.stage) return;
     if (stage === "lost") return setLostFor(lead);
+    if (stage === "won") {
+      toast.info(`Open ${lead.code} and use “Convert to client” to mark it won.`, {
+        action: { label: "Open lead", onClick: () => router.push(`/leads/${lead.id}`) },
+      });
+      return;
+    }
     try {
       await change.mutateAsync({ id: lead.id, stage });
       toast.success(`${lead.code} moved to ${stageMeta(stage).label}`);

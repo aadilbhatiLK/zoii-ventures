@@ -64,6 +64,8 @@ export function createHttpApiClient(baseUrl: string): ApiClient {
       create: (input) => request("POST", "/leads", input),
       update: (id, input) => request("PATCH", `/leads/${encodeURIComponent(id)}`, input),
       assign: (ids, ownerId) => request("POST", "/leads/assign", { ids, ownerId }),
+      bulkChangeStage: (ids, stage) => request("POST", "/leads/stage", { ids, stage }),
+      export: (q) => request("POST", "/leads/export", q),
       changeStage: (id, stage, opts) =>
         request("POST", `/leads/${encodeURIComponent(id)}/stage`, { stage, ...opts }),
       findDuplicates: (input, excludeId) =>

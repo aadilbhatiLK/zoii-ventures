@@ -25,13 +25,14 @@ CREATE TABLE teams (
   organization_id  uuid NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
   name             text NOT NULL,
   created_at       timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, name)
+  UNIQUE (organization_id, name),
+  UNIQUE (organization_id, id)
 );
 
 CREATE TABLE users (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id  uuid NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
-  team_id          uuid REFERENCES teams(id) ON DELETE SET NULL,
+  team_id          uuid,
   email            text NOT NULL CHECK (email = lower(email) AND email ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$'),
   phone_e164       text CHECK (phone_e164 ~ '^\+[1-9][0-9]{7,14}$'),
   full_name        text NOT NULL,
@@ -45,8 +46,12 @@ CREATE TABLE users (
   created_at       timestamptz NOT NULL DEFAULT now(),
   updated_at       timestamptz NOT NULL DEFAULT now(),
   UNIQUE (organization_id, email),
-  UNIQUE (organization_id, phone_e164)
+  UNIQUE (organization_id, phone_e164),
+  UNIQUE (organization_id, id),
+  -- Composite FKs keep every reference inside one organisation.
+  FOREIGN KEY (organization_id, team_id) REFERENCES teams (organization_id, id) ON DELETE SET NULL (team_id)
 );
+CREATE INDEX users_team ON users (organization_id, team_id) WHERE team_id IS NOT NULL;
 CREATE TRIGGER users_updated BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TABLE permissions (
@@ -61,7 +66,8 @@ CREATE TABLE roles (
   name             text NOT NULL,
   is_system        boolean NOT NULL DEFAULT true,
   created_at       timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, key)
+  UNIQUE (organization_id, key),
+  UNIQUE (organization_id, id)
 );
 
 CREATE TABLE role_permissions (
@@ -71,11 +77,15 @@ CREATE TABLE role_permissions (
 );
 
 CREATE TABLE user_role_assignments (
-  user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role_id     uuid NOT NULL REFERENCES roles(id) ON DELETE RESTRICT,
-  granted_by  uuid REFERENCES users(id) ON DELETE SET NULL,
-  granted_at  timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (user_id, role_id)
+  organization_id  uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  user_id          uuid NOT NULL,
+  role_id          uuid NOT NULL,
+  granted_by       uuid,
+  granted_at       timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, role_id),
+  FOREIGN KEY (organization_id, user_id) REFERENCES users (organization_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (organization_id, role_id) REFERENCES roles (organization_id, id) ON DELETE RESTRICT,
+  FOREIGN KEY (organization_id, granted_by) REFERENCES users (organization_id, id) ON DELETE SET NULL (granted_by)
 );
 
 -- Server-side sessions. Only a SHA-256 of the opaque cookie token is stored.
@@ -111,13 +121,15 @@ CREATE TABLE audit_events (
   id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   organization_id  uuid NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
   occurred_at      timestamptz NOT NULL DEFAULT now(),
-  actor_user_id    uuid REFERENCES users(id) ON DELETE SET NULL,
+  actor_user_id    uuid,
   action           text NOT NULL CHECK (action ~ '^[a-z_]+\.[a-z_]+$'),
   entity_type      text NOT NULL,
   entity_id        uuid,
   changes          jsonb NOT NULL DEFAULT '{}'::jsonb,
   request_id       text,
-  ip               inet
+  ip               inet,
+  -- Users are deactivated, never hard-deleted, so audit history keeps its actor (RESTRICT).
+  FOREIGN KEY (organization_id, actor_user_id) REFERENCES users (organization_id, id) ON DELETE RESTRICT
 );
 CREATE INDEX audit_events_entity ON audit_events (organization_id, entity_type, entity_id, occurred_at DESC);
 CREATE INDEX audit_events_actor ON audit_events (organization_id, actor_user_id, occurred_at DESC);
