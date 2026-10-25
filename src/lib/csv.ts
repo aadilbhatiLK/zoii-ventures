@@ -4,7 +4,8 @@
  */
 export function csvCell(value: string): string {
   let v = value ?? "";
-  if (/^[=+\-@\t\r]/.test(v)) v = `'${v}`;
+  // A plain signed number can't be a formula, so amounts like -1500.00 stay numeric.
+  if (/^[=+\-@\t\r]/.test(v) && !/^-?\d+(\.\d+)?$/.test(v)) v = `'${v}`;
   if (/[",\n\r]/.test(v)) v = `"${v.replace(/"/g, '""')}"`;
   return v;
 }

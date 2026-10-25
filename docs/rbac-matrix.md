@@ -32,7 +32,7 @@ The UI hides what a role can't do; the backend must enforce every row below inde
 | `quotations.create` — Create quotations | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |  |  |  |  |  |
 | `quotations.send` — Send approved quotations and record client acceptance | ✓ | ✓ | ✓ |  | ✓ |  |  |  |  |  |  |  |  |  |
 | `quotations.approve` — Approve quotations | ✓ | ✓ |  |  |  |  |  |  | ✓ |  |  |  |  |  |
-| `orders.view` — View sales orders, subscriptions and AMCs | ✓ | ✓ | ✓ |  | ✓ |  |  | ✓ | ✓ | ✓ |  |  | ✓ |  |
+| `orders.view` — View sales orders, subscriptions and AMCs | ✓ | ✓ | ✓ | ✓ | ✓ |  |  | ✓ | ✓ | ✓ |  |  | ✓ |  |
 | `orders.manage` — Create sales orders, subscriptions and AMCs | ✓ | ✓ |  |  | ✓ |  |  |  | ✓ |  |  |  |  |  |
 | `projects.view` — View projects | ✓ | ✓ |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |  |  |  | ✓ |  |
 | `projects.manage` — Manage milestones, tasks, change requests and UAT | ✓ | ✓ |  |  |  |  | ✓ | ✓ |  |  |  |  |  |  |

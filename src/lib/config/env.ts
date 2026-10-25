@@ -79,7 +79,9 @@ export function resolveAppConfig(env: RawEnv): AppConfig {
   if (url.protocol !== "https:" && url.protocol !== "http:") {
     return { ok: false, error: "NEXT_PUBLIC_API_BASE_URL must use http(s)." };
   }
-  if (isProduction && url.protocol !== "https:") {
+  // Loopback is exempt so a production build can be verified locally; browsers treat it as a secure context.
+  const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (isProduction && url.protocol !== "https:" && !loopback) {
     return { ok: false, error: "NEXT_PUBLIC_API_BASE_URL must use https in production." };
   }
   return {

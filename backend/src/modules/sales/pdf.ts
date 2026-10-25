@@ -50,9 +50,9 @@ export function renderCommercialPdf(o: {
     y = doc.y + 14;
 
     const cols = [
-      { h: "#", w: 18, a: "left" as const }, { h: "Description", w: 170, a: "left" as const }, { h: "HSN/SAC", w: 52, a: "left" as const },
+      { h: "#", w: 18, a: "left" as const }, { h: "Description", w: 128, a: "left" as const }, { h: "HSN/SAC", w: 46, a: "left" as const },
       { h: "Qty", w: 36, a: "right" as const }, { h: "Rate", w: 64, a: "right" as const }, { h: "Disc %", w: 36, a: "right" as const },
-      { h: "Taxable", w: 64, a: "right" as const }, { h: "GST %", w: 34, a: "right" as const }, { h: "Amount", w: W - 474, a: "right" as const },
+      { h: "Taxable", w: 70, a: "right" as const }, { h: "GST %", w: 32, a: "right" as const }, { h: "Amount", w: W - 430, a: "right" as const },
     ];
     const row = (vals: string[], bold = false, fill?: string) => {
       const heights = vals.map((v, i) => doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(8.5).heightOfString(v, { width: cols[i].w - 6 }));

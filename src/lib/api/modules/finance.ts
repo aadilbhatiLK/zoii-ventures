@@ -1,6 +1,6 @@
 /** Sprint 5 contracts: ledger, invoices, credit notes, receipts, bills, banking, reports. */
 import { z } from "zod";
-import { DateOnly, HsnSac, Id, Money, Pct, Qty, optText } from "./common";
+import { DateOnly, HsnSac, Id, Money, OptDate, Pct, Qty, optText } from "./common";
 
 export type AccountType = "asset" | "liability" | "equity" | "income" | "expense";
 export interface Account { id: string; code: string; name: string; type: AccountType; systemKey: string | null; isBank: boolean; active: boolean; balance: string }
@@ -27,7 +27,7 @@ export const InvoiceLineInputSchema = z.object({
   revenue: z.enum(["services", "subscriptions"]).default("services"),
 });
 export const InvoiceInputSchema = z.object({
-  clientId: Id, salesOrderId: Id.optional().nullable(), invoiceDate: DateOnly, dueDate: DateOnly.optional(), notes: optText(2000),
+  clientId: Id, salesOrderId: Id.optional().nullable(), invoiceDate: DateOnly, dueDate: OptDate, notes: optText(2000),
   lines: z.array(InvoiceLineInputSchema).min(1).max(100),
 });
 export type InvoiceStatus = "draft" | "issued" | "partially_paid" | "paid" | "cancelled";
@@ -63,7 +63,7 @@ export const VendorInputSchema = z.object({
 });
 export interface Vendor { id: string; name: string; gstin: string | null; pan: string | null; stateCode: string | null; email: string | null; phone: string | null; outstanding: string }
 export const BillInputSchema = z.object({
-  kind: z.enum(["bill", "expense"]), vendorId: Id.optional().nullable(), vendorBillNo: optText(60), billDate: DateOnly, dueDate: DateOnly.optional(),
+  kind: z.enum(["bill", "expense"]), vendorId: Id.optional().nullable(), vendorBillNo: optText(60), billDate: DateOnly, dueDate: OptDate,
   description: z.string().trim().min(3).max(300), expenseAccountId: Id, taxable: Money.refine((v) => Number(v) > 0, "Must be more than 0"),
   gstRate: z.string().regex(/^\d{1,2}(\.\d{1,2})?$/).default("0"), interState: z.boolean().default(false), itcEligible: z.boolean().default(true),
   tdsSection: optText(20), tdsAmount: Money.default("0"), paidFromAccountId: Id.optional(),

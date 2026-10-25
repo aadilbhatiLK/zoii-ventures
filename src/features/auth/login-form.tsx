@@ -11,11 +11,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/misc";
 import { useAuth } from "./auth-provider";
 import { safeNextPath } from "./safe-next";
 import { isApiError, userMessage } from "@/lib/api/errors";
-import { DEMO_OTP, DEMO_PASSWORD } from "@/lib/mock/seed";
+import { DEMO_OTP, DEMO_PASSWORD, DEMO_USERS } from "@/lib/mock/seed";
 import { appConfig } from "@/lib/config/env";
 import { cn } from "@/lib/utils";
 
 const isDemo = appConfig.ok && appConfig.mode === "demo";
+/** Review builds against a seeded demo backend may list the fictional demo accounts. */
+const showDemoAccounts = !isDemo && process.env.NEXT_PUBLIC_SHOW_DEMO_ACCOUNTS === "true";
 
 function CodeInput({
   id,
@@ -60,6 +62,7 @@ export function LoginForm() {
     demoCode?: string;
   } | null>(null);
   const [mfaChallenge, setMfaChallenge] = useState<string | null>(null);
+  const [enrolment, setEnrolment] = useState<{ secret: string; otpauthUri: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [resendIn, setResendIn] = useState(0);
@@ -99,8 +102,9 @@ export function LoginForm() {
     if (!email.trim() || !password) return setError("Enter your email and password.");
     void run(async () => {
       const r = await auth.signInWithPassword(email, password);
-      if (r.status === "mfa_required") {
+      if (r.status === "mfa_required" || r.status === "mfa_enrollment_required") {
         setMfaChallenge(r.challengeId);
+        setEnrolment(r.status === "mfa_enrollment_required" ? { secret: r.secret, otpauthUri: r.otpauthUri } : null);
         setCode("");
       }
     });
@@ -132,10 +136,13 @@ export function LoginForm() {
         <div className="bg-accent-soft text-accent mb-6 flex size-10 items-center justify-center rounded-lg">
           <KeyRound className="size-5" />
         </div>
-        <h1 className="text-xl font-semibold">Two-step verification</h1>
+        <h1 className="text-xl font-semibold">{enrolment ? "Set up two-step verification" : "Two-step verification"}</h1>
         <p className="text-fg-muted mt-1 text-sm">
-          Your role requires a second factor. Enter the 6-digit code from your authenticator app.
+          {enrolment
+            ? "Your role requires an authenticator app. Scan the code with Google Authenticator, Microsoft Authenticator or similar, then enter the 6-digit code it shows."
+            : "Your role requires a second factor. Enter the 6-digit code from your authenticator app."}
         </p>
+        {enrolment && <EnrolmentCode {...enrolment} />}
         <form
           className="mt-6 space-y-4"
           onSubmit={(e) => {
@@ -147,7 +154,7 @@ export function LoginForm() {
             label="Verification code"
             htmlFor="mfa"
             error={error ?? undefined}
-            hint={isDemo ? `Demo code: ${DEMO_OTP}` : undefined}
+            hint={isDemo || showDemoAccounts ? `Demo code: ${DEMO_OTP}` : undefined}
           >
             <CodeInput id="mfa" value={code} onChange={setCode} autoFocus />
           </Field>
@@ -297,8 +304,9 @@ export function LoginForm() {
                 e.preventDefault();
                 void run(async () => {
                   const r = await auth.verifyPhoneOtp(otpChallenge.id, code);
-                  if (r.status === "mfa_required") {
+                  if (r.status === "mfa_required" || r.status === "mfa_enrollment_required") {
                     setMfaChallenge(r.challengeId);
+                    setEnrolment(r.status === "mfa_enrollment_required" ? { secret: r.secret, otpauthUri: r.otpauthUri } : null);
                     setCode("");
                   }
                 });
@@ -352,7 +360,7 @@ export function LoginForm() {
         </TabsContent>
       </Tabs>
 
-      {isDemo && (
+      {(isDemo || showDemoAccounts) && (
         <DemoAccounts
           onPick={(e, ph) => {
             setTab("email");
@@ -367,10 +375,37 @@ export function LoginForm() {
   );
 }
 
+function EnrolmentCode({ secret, otpauthUri }: { secret: string; otpauthUri: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    // Rendered locally; the secret never leaves the browser to a third-party QR service.
+    void import("qrcode").then((q) => q.toDataURL(otpauthUri, { margin: 1, width: 176 })).then((u) => alive && setSrc(u));
+    return () => {
+      alive = false;
+    };
+  }, [otpauthUri]);
+  return (
+    <div className="border-border bg-surface-2 mt-5 flex items-center gap-4 rounded-lg border p-3">
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element -- data URL generated in the browser
+        <img src={src} alt="Authenticator QR code" width={112} height={112} className="rounded bg-white p-1" />
+      ) : (
+        <div className="bg-surface-3 size-28 animate-pulse rounded" />
+      )}
+      <div className="min-w-0 text-xs">
+        <p className="text-fg-muted">Can&apos;t scan? Enter this key:</p>
+        <code className="text-fg mt-1 block font-mono text-[13px] break-all select-all">{secret.match(/.{1,4}/g)?.join(" ")}</code>
+      </div>
+    </div>
+  );
+}
+
 function DemoAccounts({ onPick }: { onPick: (email: string, phone: string) => void }) {
-  const { personas } = useAuth();
+  const { personas: live } = useAuth();
+  const personas = live ?? (showDemoAccounts ? DEMO_USERS : null);
   if (!personas) return null;
-  const featured = ["u_founder", "u_salesmgr", "u_sales1", "u_fin", "u_auditor"];
+  const featured = ["u_founder", "u_admin", "u_salesmgr", "u_sales1", "u_am", "u_pm", "u_fin", "u_acct", "u_hr", "u_dev", "u_auditor"];
   return (
     <div className="border-border-strong bg-surface-2 mt-8 rounded-lg border border-dashed p-3">
       <p className="text-fg text-xs font-medium">Demo accounts</p>

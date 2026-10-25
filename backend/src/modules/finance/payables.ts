@@ -5,6 +5,7 @@ import type { Queryable } from "../../db";
 import { type Actor, type Deps, addDays, audit, fyCode, need, nextNumber } from "../../lib/context";
 import { conflict, invalid, notFound, parse } from "../../lib/errors";
 import { iso, isUuid } from "../../lib/query";
+import { idempotent } from "../../lib/idempotency";
 import { postJournal, systemAccounts } from "./ledger";
 
 interface BRow { id: string; number: string; kind: Bill["kind"]; vendor_id: string | null; vendor_name: string | null; vendor_bill_no: string | null; bill_date: string; due_date: string; description: string; expense_account_id: string; expense_account_name: string; taxable: string; cgst: string; sgst: string; igst: string; itc_eligible: boolean; tds_section: string | null; tds_amount: string; total: string; payable: string; amount_paid: string; status: Bill["status"]; journal_entry_id: string; created_at: Date }
@@ -108,10 +109,11 @@ export class PayablesService {
     return this.get(a, id);
   }
 
-  async pay(a: Actor, id: string, body: unknown) {
+  async pay(a: Actor, id: string, body: unknown, idempotencyKey: string | undefined) {
     need(a, "finance.bill.manage");
     const d = parse(BillPaymentSchema, body);
-    await this.db.tx(async (q) => {
+    // A double-click or network retry must never pay a vendor twice.
+    await this.db.tx((q) => idempotent(q, a.orgId, "bill.pay", idempotencyKey, { billId: id, ...d }, async () => {
       const b = (await q.query<BRow>(`${B_SELECT} WHERE b.id = $1 AND b.organization_id = $2 FOR UPDATE OF b`, [id, a.orgId])).rows[0];
       if (!b) throw notFound("Bill");
       if (b.kind !== "bill") throw conflict("Expenses are recorded as paid.");
@@ -130,7 +132,8 @@ export class PayablesService {
       const paid = toPaise(b.amount_paid) + toPaise(d.amount);
       await q.query(`UPDATE bills SET amount_paid = $2, status = $3 WHERE id = $1`, [id, fromPaise(paid), paid === toPaise(b.payable) ? "paid" : "partially_paid"]);
       await audit(q, a, "bill.pay", "bill", id, { amount: d.amount });
-    });
+      return { billId: id };
+    }));
     return this.get(a, id);
   }
 }

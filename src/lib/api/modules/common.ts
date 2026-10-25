@@ -11,3 +11,7 @@ export const optText = (max: number) => z.string().trim().max(max).optional().tr
 export interface Page<T> { items: T[]; total: number; page: number; pageSize: number }
 export const BILLING_CYCLES = { one_time: "One-time", monthly: "Monthly", quarterly: "Quarterly", yearly: "Yearly" } as const;
 export type BillingCycle = keyof typeof BILLING_CYCLES;
+
+/** Optional date from a form: an empty input means "not set", not an invalid date. */
+export const OptDate = z.preprocess((v) => (v === "" || v === null ? undefined : v), DateOnly.optional());
+export const NullableDate = z.preprocess((v) => (v === "" ? null : v), DateOnly.nullable().optional());

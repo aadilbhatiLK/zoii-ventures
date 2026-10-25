@@ -1,6 +1,5 @@
 import type { ApiClient } from "./client";
-import type { ApiErrorBody } from "./contracts";
-import { ApiError } from "./errors";
+import { apiFetch, qs as buildQs } from "./request";
 
 /**
  * Real backend adapter. Authentication uses an httpOnly session cookie set by the
@@ -8,53 +7,8 @@ import { ApiError } from "./errors";
  * State-changing requests send X-Requested-With for the backend's CSRF check.
  */
 export function createHttpApiClient(baseUrl: string): ApiClient {
-  async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    let res: Response;
-    try {
-      res = await fetch(`${baseUrl}/api/v1${path}`, {
-        method,
-        credentials: "include",
-        headers: {
-          Accept: "application/json",
-          ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-          ...(method !== "GET" ? { "X-Requested-With": "zoii-web" } : {}),
-        },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-      });
-    } catch {
-      throw new ApiError({ code: "NETWORK", message: "Network request failed." });
-    }
-    if (res.status === 204) return undefined as T;
-    let payload: unknown = null;
-    try {
-      payload = await res.json();
-    } catch {
-      payload = null;
-    }
-    if (!res.ok) {
-      const errBody = (payload as { error?: ApiErrorBody } | null)?.error;
-      throw new ApiError(
-        errBody ?? {
-          code: res.status === 401 ? "UNAUTHENTICATED" : "INTERNAL",
-          message: `Request failed (${res.status}).`,
-        },
-        res.status,
-      );
-    }
-    return (payload as { data: T }).data;
-  }
-
-  const qs = (q: object) => {
-    const params = new URLSearchParams();
-    for (const [k, v] of Object.entries(q)) {
-      if (v === undefined || v === null || v === "") continue;
-      if (Array.isArray(v)) v.forEach((x) => params.append(k, String(x)));
-      else if (typeof v === "object") params.set(k, JSON.stringify(v));
-      else params.set(k, String(v));
-    }
-    const s = params.toString();
-    return s ? `?${s}` : "";
-  };
+  const request = <T,>(method: string, path: string, body?: unknown) => apiFetch<T>(method, path, body, {}, baseUrl);
+  const qs = (q: object) => buildQs(q as Record<string, unknown>);
 
   return {
     mode: "api",

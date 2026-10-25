@@ -37,6 +37,10 @@ import {
   Wallet,
   Workflow,
   Circle,
+  CircleUser,
+  Globe,
+  ListTodo,
+  Lock,
   type LucideIcon,
 } from "lucide-react";
 
@@ -78,6 +82,10 @@ const ICONS: Record<string, LucideIcon> = {
   Users,
   Wallet,
   Workflow,
+  CircleUser,
+  Globe,
+  ListTodo,
+  Lock,
 };
 
 export function NavIcon({ name, className }: { name: string; className?: string }) {

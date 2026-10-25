@@ -1,6 +1,6 @@
 # Security baseline
 
-Status legend: **Implemented & tested** · **Implemented (untested)** · **Designed (backend, Sprint 2)** · **Open**.
+Status legend: **Implemented & tested** · **Implemented (reviewed)** · **Implemented** · **Open**.
 Nothing here claims the system is "secure"; it records what exists and what was checked.
 
 ## Frontend (Sprint 1)
@@ -28,16 +28,40 @@ Nothing here claims the system is "secure"; it records what exists and what was 
 
 **The demo auth adapter is not a security boundary.** It exists to exercise UI states (MFA, OTP expiry/reuse, rate limits, non-enumerating reset).
 
-## Backend (designed for Sprint 2 — not implemented)
+## Backend (Sprints 2–6)
 
-- Auth via a vetted library (e.g. Better Auth / Lucia-style session tables already modelled in `0001_foundation.sql`), argon2id password hashing, server-side sessions with hashed tokens, revocation on logout/role change.
-- OTP: 6 digits, 5-minute expiry, single use, max 5 attempts, per-number and per-IP rate limits, delivered via a DLT-registered SMS provider (India TRAI rules).
-- MFA (TOTP) mandatory for super admin, founder, finance, HR, auditor.
-- Authorization guard on every endpoint using the same permission registry + record scope; integration tests call endpoints directly as each role.
-- CSRF: SameSite cookies + required `X-Requested-With` header on state changes.
-- Rate limiting (login, OTP, password reset, search), request size limits, file-type sniffing + private object storage with short-lived signed URLs.
-- Least-privilege DB roles (app role without DDL; migration role separate), private networking, encrypted backups with tested restore.
-- Audit events for every sensitive write; structured logs without passwords, OTPs or tokens; error monitoring and security alerts.
+Evidence column: `S2` = `backend/tests/s2-auth-crm.test.ts`, `S3-6` = `backend/tests/s3-s6-flows.test.ts`. Both run against real Postgres (PGlite).
+
+| Control | Status | Evidence |
+| ------- | ------ | -------- |
+| Config refuses unsafe production settings: missing `DATABASE_URL` / `DATA_ENCRYPTION_KEY`, http CORS origins, `AUTH_DEV_STATIC_CODES`, console SMS/email, demo seed | Implemented | `backend/src/config.ts` |
+| Passwords hashed with argon2id; session tokens are 32 random bytes, only the SHA-256 hash is stored; httpOnly, SameSite=Lax cookie, `Secure` when configured | Implemented & tested | S2 |
+| TOTP MFA (RFC 6238, ±1 step) mandatory for privileged roles. Enrolment is forced at first login. Secrets are AES-256-GCM encrypted at rest. An OTP never counts as a second factor. | Implemented & tested | S2 |
+| Throttling: 5 failures per account/challenge and 50 per IP in 10 minutes (DB-backed), plus per-route rate limits | Implemented & tested | S2 |
+| OTP request and password reset are non-enumerating. Reset tokens are single-use and hashed, and a reset revokes all sessions. | Implemented & tested | S2 |
+| CSRF: state-changing requests require `X-Requested-With: zoii-web` and an allow-listed `Origin` | Implemented & tested | S2 |
+| Authorization on every route (`need` + record scope); out-of-scope records return 404; tested by calling the API directly as different roles | Implemented & tested | S2, S3-6 |
+| Optimistic concurrency (409) on lead, client, quotation and settings edits | Implemented & tested | S2, S3-6 |
+| Maker-checker: requesters cannot approve their own documents, quotations, change requests, leave or payroll; payroll approver ≠ preparer is also a DB `CHECK` | Implemented & tested | S3-6 |
+| Financial integrity in the DB: balanced journals (deferred trigger), append-only journals, sign-offs and audit, frozen issued documents, closed-period lock, bounded allocations | Implemented & tested | S3-6, `db:verify` |
+| Idempotency-Key on receipts and bill payments (replay returns the original, different body → 409) | Implemented & tested | S3-6 |
+| Employee bank account numbers encrypted (AES-256-GCM); API returns last 4 only | Implemented & tested | S3-6 |
+| Audit event on every write; audit table append-only (UPDATE/DELETE raise) | Implemented & tested | S2, S3-6 |
+| No passwords, OTPs or tokens in logs. Console messaging is refused in production; Fastify logger redacts the cookie and authorization headers. | Implemented (reviewed) | `app.ts`, `config.ts` |
+| Request body limit 2 MB; bank CSV import capped | Implemented | `app.ts` |
+| PDFs generated server-side from DB data; no user HTML is rendered | Implemented | `sales/pdf.ts` |
+| Dependencies audited (root + backend) | Implemented | `npm audit` → 0 vulnerabilities |
+
+### Known limitations (backend)
+
+- **Rate limits are in-memory per instance.** Multiple API instances need a shared store (Redis). The DB-backed auth throttle is already shared.
+- **The worker runs inside the API process.** Run a single dedicated worker before scaling out.
+- **CSP is still static** with `'unsafe-inline'` scripts. A nonce-based CSP via `proxy.ts` is still open.
+- **No SMS/email provider.** OTP login and password-reset emails cannot reach users in production until one is integrated; messages queue as `blocked`.
+- **Payroll TDS is entered manually**, and PF/ESI/PT rates come from settings. A CA must confirm the statutory configuration before real payroll runs.
+- **No e-invoice IRN / GST portal integration.** PDFs state that no IRN was generated.
+- **No penetration test yet.** Run one only against an authorised staging environment.
+- The least-privilege DB role split (app role without DDL, separate migration role) is documented in deployment, but not enforced by code.
 
 ## Independent review
 

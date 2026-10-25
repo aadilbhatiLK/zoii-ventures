@@ -1,50 +1,67 @@
 # Deployment
 
-## Environment variables
+**Nothing is deployed yet.** Everything below has been run locally, including against a production frontend build and the bundled API. It has not been run against managed infrastructure, because no hosting or database credentials have been provided.
 
-| Variable                               | Required               | Notes                                                                                              |
-| -------------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------- |
-| `NEXT_PUBLIC_DATA_MODE`                | **Yes in production**  | `api` for real use. `demo` uses fictional in-browser data. Defaults to `demo` only in development. |
-| `NEXT_PUBLIC_API_BASE_URL`             | When mode = `api`      | Absolute `https://` URL of the backend (paths are `/api/v1/...`).                                  |
-| `NEXT_PUBLIC_ALLOW_DEMO_IN_PRODUCTION` | Only for review builds | Must be exactly `true` for a production build to run in demo mode. A banner stays visible.         |
+## Frontend environment (public — inlined into the browser bundle)
 
-All three are public (inlined into the browser bundle). Never add secrets with the `NEXT_PUBLIC_` prefix.
+| Variable | Required | Notes |
+| -------- | -------- | ----- |
+| `NEXT_PUBLIC_DATA_MODE` | **Yes in production** | `api` for real use; `demo` = fictional in-browser data. |
+| `NEXT_PUBLIC_API_BASE_URL` | When mode = `api` | Absolute `https://` URL of the API. Plain `http` is accepted only for `localhost`/`127.0.0.1`, so production builds can be verified locally. |
+| `NEXT_PUBLIC_ALLOW_DEMO_IN_PRODUCTION` | Review builds only | Must be exactly `true` for a production build to run in demo mode. |
+| `NEXT_PUBLIC_SHOW_DEMO_ACCOUNTS` | Never in production | Lists the seeded dev accounts on the sign-in page. |
 
-If the configuration is invalid, every page renders "Zoii Business OS isn't configured" with the reason. It never falls back to demo data.
+Never put secrets in `NEXT_PUBLIC_*`. If the configuration is invalid, every page renders a configuration error and the app never falls back to demo data.
 
-## Vercel (frontend)
+## API environment (server-side only) — see `backend/.env.example`
 
-1. Import the repository; framework preset Next.js; Node 20.9+.
-2. **Design-review preview:** `NEXT_PUBLIC_DATA_MODE=demo`, `NEXT_PUBLIC_ALLOW_DEMO_IN_PRODUCTION=true`.
-3. **Production (after Sprint 2):** `NEXT_PUBLIC_DATA_MODE=api`, `NEXT_PUBLIC_API_BASE_URL=https://api.<domain>`; remove the demo latch.
-4. The backend must allow the Vercel origin via CORS with credentials, and set cookies for the shared parent domain (e.g. `app.zoii.in` + `api.zoii.in`).
+| Variable | Production requirement |
+| -------- | ---------------------- |
+| `NODE_ENV` | `production` |
+| `DATABASE_URL`, `DATABASE_SSL` | Required. Managed PostgreSQL 16+. Use SSL. |
+| `DATA_ENCRYPTION_KEY` | Required. 32 random bytes, base64. Encrypts TOTP secrets and employee bank accounts. **Back it up separately; losing it means re-enrolling MFA and re-entering bank details.** |
+| `CORS_ORIGINS`, `APP_BASE_URL` | Required, https only. |
+| `COOKIE_SECURE=true`, `COOKIE_DOMAIN` | Shared parent domain, for example `app.zoii.in` and `api.zoii.in`. |
+| `TRUST_PROXY` | `true` only behind a load balancer that sets `X-Forwarded-For`. |
+| `SMS_PROVIDER`, `EMAIL_PROVIDER` | `none` until a provider is integrated. `console` is refused in production. |
+| `AUTH_DEV_STATIC_CODES`, `SEED_DEMO` | Must be unset/false. The API refuses to start otherwise. |
+| `MIGRATE_ON_START` | Leave unset. Migrate as a release step. |
 
-Vercel hosts only the frontend. It does not provide the backend API, PostgreSQL, OTP/SMS delivery, background workers or file storage.
-
-## Backend (Sprint 2 plan)
-
-| Piece      | Suggested                                                        | Notes                                                     |
-| ---------- | ---------------------------------------------------------------- | --------------------------------------------------------- |
-| API        | NestJS on Azure App Service / Container Apps (or Render/Railway) | Same region as the database; health check endpoint        |
-| Database   | Managed PostgreSQL 16 (Azure Flexible Server / Neon / Supabase)  | Private networking, PITR backups, separate migration role |
-| Jobs       | BullMQ worker + Redis                                            | Reminders, notifications, imports                         |
-| Files      | Private blob storage                                             | Signed, short-lived download URLs                         |
-| SMS/OTP    | DLT-registered Indian SMS provider                               | Sender ID + template approval needed before go-live       |
-| Monitoring | Sentry (or equivalent) + uptime checks                           | Alerts on auth failures and job errors                    |
-
-## Local development
+## Release procedure
 
 ```bash
-cp .env.example .env.local   # demo mode by default
-npm install
-npm run dev                  # http://localhost:3000 — demo accounts listed on the sign-in screen
-npm run check                # typecheck, lint, tests, migration verify, production build
+cd backend
+npm ci && npm run build                 # → dist/server.mjs (esbuild bundle)
+npm run migrate                         # release step, with a migration role; after a verified backup
+ADMIN_PASSWORD='…' npm run create-admin -- --email you@zoii.in --name "…" --gstin …   # first deploy only; read password from a secret store, not shell history
+NODE_ENV=production node dist/server.mjs
 ```
 
-E2E smoke (needs a running server):
+- Migrations are forward-only and checksummed. An already-applied file that has been edited makes the runner refuse to continue.
+- **Never run migrations against production without a tested backup/restore and explicit approval.**
+- Health check: `GET /healthz`.
+- The worker runs inside the API process. Before running more than one API instance:
+  - move the worker into its own single-instance process;
+  - move the rate-limit store to Redis.
+  
+  Automations are already exactly-once at the DB level, but outbox dispatch and rate limits are per instance.
+
+## Suggested hosting
+
+| Piece | Suggested | Notes |
+| ----- | --------- | ----- |
+| Frontend | Vercel | `NEXT_PUBLIC_DATA_MODE=api`, `NEXT_PUBLIC_API_BASE_URL=https://api.<domain>` |
+| API | Azure Container Apps / Render / Railway (Node 20+) | Same region as the DB (India) |
+| Database | Azure Flexible Server / Neon / Supabase (PG 16+) | PITR backups, private networking, separate migration role |
+| SMS/OTP | DLT-registered Indian provider | Sender ID + template approval before go-live |
+| Email | SES / Postmark | SPF/DKIM on the domain |
+| Monitoring | Sentry + uptime check on `/healthz` | Alerts on auth failures and worker errors |
+
+## Local verification
 
 ```bash
-NEXT_PUBLIC_DATA_MODE=demo NEXT_PUBLIC_ALLOW_DEMO_IN_PRODUCTION=true npm run build
-npx next start -p 3100 &
-BASE_URL=http://localhost:3100 npm run e2e
+cd backend && npm run build && node --env-file=.env dist/server.mjs     # :4000
+# frontend, with .env.local in api mode:
+npm run build && npx next start -p 3000
+node tests/e2e/modules.cjs && node tests/e2e/flow.cjs
 ```

@@ -203,6 +203,7 @@ SELECT r.id, v.permission_key FROM roles r JOIN (VALUES
   ('sales_executive', 'catalogue.view'),
   ('sales_executive', 'documents.view'),
   ('sales_executive', 'quotations.view'),
+  ('sales_executive', 'orders.view'),
   ('sales_executive', 'hr.self_service'),
   ('account_manager', 'dashboard.view'),
   ('account_manager', 'leads.view_own'),

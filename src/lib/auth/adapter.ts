@@ -2,7 +2,10 @@ import type { Session, User } from "@/lib/api/contracts";
 import type { DataMode } from "@/lib/config/env";
 
 export type SignInResult =
-  { status: "ok"; session: Session } | { status: "mfa_required"; challengeId: string };
+  | { status: "ok"; session: Session }
+  | { status: "mfa_required"; challengeId: string }
+  /** First sign-in of a privileged account: scan the secret, then verify a code (no session until then). */
+  | { status: "mfa_enrollment_required"; challengeId: string; otpauthUri: string; secret: string };
 
 export interface OtpChallenge {
   challengeId: string;

@@ -1,6 +1,6 @@
 /** Sprint 4 contracts: sales orders, projects, milestones, tasks, change requests, UAT, sign-off, subscriptions. */
 import { z } from "zod";
-import { DateOnly, HsnSac, Id, Money, optText } from "./common";
+import { DateOnly, HsnSac, Id, Money, NullableDate, optText } from "./common";
 
 export interface SalesOrder {
   id: string; number: string; clientId: string; clientName: string; quotationId: string; quotationNumber: string; status: "open" | "completed" | "cancelled";
@@ -9,7 +9,7 @@ export interface SalesOrder {
 
 export const ProjectCreateSchema = z.object({
   name: z.string().trim().min(3).max(160), clientId: Id, salesOrderId: Id.optional().nullable(), scopeDocumentId: Id.optional().nullable(),
-  billable: z.boolean().default(true), managerId: Id, startDate: DateOnly.optional().nullable(), dueDate: DateOnly.optional().nullable(),
+  billable: z.boolean().default(true), managerId: Id, startDate: NullableDate, dueDate: NullableDate,
   memberIds: z.array(Id).max(50).default([]),
 });
 export type ProjectStatus = "planned" | "active" | "on_hold" | "completed" | "cancelled";
@@ -21,7 +21,7 @@ export interface Project {
 }
 export interface ProjectDetail extends Project { milestones: Milestone[]; activation: ActivationCheck[]; changeRequests: ChangeRequest[] }
 
-export const MilestoneInputSchema = z.object({ name: z.string().trim().min(2).max(160), dueDate: DateOnly.optional().nullable(), amount: Money.default("0") });
+export const MilestoneInputSchema = z.object({ name: z.string().trim().min(2).max(160), dueDate: NullableDate, amount: Money.default("0") });
 export type MilestoneStatus = "pending" | "in_progress" | "uat" | "signed_off" | "invoiced";
 export interface Milestone {
   id: string; seq: number; name: string; dueDate: string | null; amount: string; status: MilestoneStatus; signedOffAt: string | null;
@@ -30,7 +30,7 @@ export interface Milestone {
 
 export const TaskInputSchema = z.object({
   title: z.string().trim().min(2).max(200), description: optText(4000), milestoneId: Id.optional().nullable(), assigneeId: Id.optional().nullable(),
-  priority: z.enum(["low", "medium", "high", "urgent"]).default("medium"), dueDate: DateOnly.optional().nullable(),
+  priority: z.enum(["low", "medium", "high", "urgent"]).default("medium"), dueDate: NullableDate,
   estimateHours: z.string().regex(/^\d{1,4}(\.\d{1,2})?$/).optional().nullable(),
 });
 export const TASK_STATUSES = { todo: "To do", in_progress: "In progress", review: "In review", blocked: "Blocked", done: "Done" } as const;
@@ -64,7 +64,7 @@ export const SignoffInputSchema = z.object({
 export const SubscriptionInputSchema = z.object({
   clientId: Id, productId: Id.optional().nullable(), salesOrderId: Id.optional().nullable(), kind: z.enum(["subscription", "amc"]),
   description: z.string().trim().min(3).max(300), hsnSac: HsnSac, amount: Money.refine((v) => Number(v) > 0, "Amount must be more than 0"),
-  billingCycle: z.enum(["monthly", "quarterly", "yearly"]), startDate: DateOnly, endDate: DateOnly.optional().nullable(),
+  billingCycle: z.enum(["monthly", "quarterly", "yearly"]), startDate: DateOnly, endDate: NullableDate,
   autoRenew: z.boolean().default(true), renewalNoticeDays: z.number().int().min(0).max(180).default(30), ownerId: Id.optional(),
 });
 export interface Subscription {

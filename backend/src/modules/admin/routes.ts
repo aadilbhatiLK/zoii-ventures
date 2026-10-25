@@ -34,6 +34,13 @@ export function adminRoutes(r: Router, deps: Deps) {
     return { organization: { name: org.name, legalName: org.legal_name, gstin: org.gstin, stateCode: org.state_code }, ...(await getSettings(db, actor.orgId)), defaults: DEFAULT_SETTINGS };
   });
 
+  // Minimal organisation facts every signed-in user may see (tax previews, document headers).
+  r.get("/org/profile", async ({ actor }) => {
+    const org = (await db.query<{ legal_name: string; gstin: string | null; state_code: string | null }>(`SELECT legal_name, gstin, state_code FROM organizations WHERE id = $1`, [actor.orgId])).rows[0];
+    const s = await getSettings(db, actor.orgId);
+    return { legalName: org.legal_name, gstin: org.gstin, stateCode: org.state_code, docPrefix: s.profile.docPrefix, quotationDiscountApprovalPct: s.quotations.discountApprovalPct };
+  });
+
   r.put("/admin/settings", async ({ actor, body }) => {
     need(actor, "settings.manage");
     const d = parse(SettingsSchema, body);

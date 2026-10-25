@@ -47,6 +47,14 @@ describe("resolveAppConfig — never silently falls back to demo data", () => {
       }),
     ).toMatchObject({ ok: true, mode: "api", apiBaseUrl: "https://api.zoii.in" });
   });
+  it("allows plain http only for an exact loopback host (local production builds)", () => {
+    const prod = (url: string) =>
+      resolveAppConfig({ NODE_ENV: "production", NEXT_PUBLIC_DATA_MODE: "api", NEXT_PUBLIC_API_BASE_URL: url }).ok;
+    expect(prod("http://localhost:4000")).toBe(true);
+    expect(prod("http://127.0.0.1:4000")).toBe(true);
+    expect(prod("http://localhost.evil.com")).toBe(false);
+    expect(prod("http://10.0.0.5:4000")).toBe(false);
+  });
   it("rejects unknown modes and malformed URLs", () => {
     expect(resolveAppConfig({ NODE_ENV: "development", NEXT_PUBLIC_DATA_MODE: "mock" }).ok).toBe(
       false,

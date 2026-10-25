@@ -269,8 +269,14 @@ describe("Sprint 5 — finance", () => {
     const b = await as.acct.post("/bills", { kind: "bill", vendorId: v.data.id, vendorBillNo: "CH-991", billDate: "2026-10-10", description: "Servers October", expenseAccountId: exp.id, taxable: "10000", gstRate: "18", tdsSection: "194J", tdsAmount: "1000" });
     expect(b.data).toMatchObject({ cgst: "900.00", sgst: "900.00", total: "11800.00", payable: "10800.00", status: "unpaid" });
     expect((await as.acct.post("/bills", { kind: "bill", vendorId: v.data.id, vendorBillNo: "CH-991", billDate: "2026-10-10", description: "dup", expenseAccountId: exp.id, taxable: "1" })).status).toBe(409);
-    const p = await as.acct.post(`/bills/${b.data.id}/payments`, { paymentDate: "2026-10-20", amount: "10800", paidFromAccountId: await sys("bank"), reference: "NEFT77" });
+    const payBody = { paymentDate: "2026-10-20", amount: "10800", paidFromAccountId: await sys("bank"), reference: "NEFT77" };
+    expect((await as.acct.post(`/bills/${b.data.id}/payments`, payBody)).status).toBe(422); // key required
+    const p = await as.acct.post(`/bills/${b.data.id}/payments`, payBody, { "Idempotency-Key": "bill-pay-ch991-1" });
     expect(p.data.status).toBe("paid");
+    // A retried request (double-click / network retry) must not pay the vendor twice.
+    const retry = await as.acct.post(`/bills/${b.data.id}/payments`, payBody, { "Idempotency-Key": "bill-pay-ch991-1" });
+    expect(retry.status).toBe(200);
+    expect(retry.data).toMatchObject({ status: "paid", amountPaid: "10800.00" });
     ids.billPayAmount = "10800";
   });
 

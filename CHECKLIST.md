@@ -2,39 +2,79 @@
 
 Legend: [x] done and verified · [~] partial · [ ] not started
 
+"Verified" means covered by an automated test that was run: backend integration tests on real Postgres (PGlite), frontend unit tests, `db:verify`, or the browser e2e scripts. Nothing here has been tested against a deployed environment yet.
+
 ## Sprint 1 — Foundation & premium frontend
 
 - [x] Next.js 16 App Router, TypeScript strict, Tailwind 4, ESLint, Prettier, Vitest
 - [x] Environment guard: demo/api modes, production latch, hard config-error screen
-- [x] Design tokens (light/dark), Inter + Inter Display (self-hosted), validated chart palette
-- [x] UI primitives: button, inputs/field, select, dialog, sheet, confirm, menus, popover, tooltip, tabs, segmented, badge, avatar, skeleton, kbd
-- [x] App shell: collapsible grouped sidebar, breadcrumbs, global search / command palette (Ctrl/⌘K), Create menu, notifications, user menu (theme, demo persona switch, sign out), mobile drawer
-- [x] Permission registry (31 permissions, 14 roles), record-level lead scope, permission-filtered nav, generated RBAC matrix
-- [x] Typed contracts (zod) + ApiClient interface + demo adapter + HTTP adapter
-- [x] Auth screens: email/password, MFA step, phone OTP with resend timer, password reset (non-enumerating); demo auth adapter
-- [x] Role-aware dashboard (company / team / own / non-sales), KPI tiles, charts with table view, demo labels
-- [x] Leads: server-driven table (search, facets, sort, pagination, selection, resize, column visibility, saved views), bulk assign / stage change with confirmation, CSV export, create/edit sheet with duplicate detection and unsaved-changes guard
-- [x] Lead detail: stage stepper, next step, activity timeline, log activity, follow-ups, reassign, mark lost (reason), convert to client
-- [x] Pipeline board (drag-and-drop + keyboard-accessible arrows), Follow-ups (overdue/today/upcoming)
-- [x] Clients: list, profile (tax profile, GSTIN checksum, contacts, unified timeline), create/edit
-- [x] Planned modules route to an honest roadmap page (no fake screens)
-- [x] PWA: manifest, icons, service worker (static + offline only), offline page
-- [x] SQL migrations 0001/0002 + permission seed, verified on PGlite
-- [x] Tests: 77 unit/component (incl. review regressions), 34 migration checks, 21-step browser e2e; docs set
-- [x] Independent security/correctness review: 18 findings fixed or documented (see docs/security-baseline.md)
-- [ ] Vercel preview deployment — needs repository + Vercel access
+- [x] Design tokens, UI primitives, app shell, command palette, notifications, mobile drawer
+- [x] Permission registry, permission-filtered nav, generated RBAC matrix
+- [x] Auth screens, role-aware dashboard, leads, pipeline, follow-ups, clients
+- [x] PWA (static + offline only)
+- [x] Independent review: 18 findings fixed or documented
+- [ ] Vercel preview deployment — needs Vercel access
 
 ## Sprint 2 — Backend & real CRM
 
-- [ ] NestJS service, config validation, health check
-- [ ] Apply migrations to managed Postgres (staging), seed permissions/roles
-- [ ] Auth module (sessions, argon2id, MFA TOTP, OTP via SMS provider, rate limits)
-- [ ] Leads/clients/activities/follow-ups/search/notifications endpoints per docs/api-contracts.md
-- [ ] Authorization guard + direct-API access tests per role
-- [ ] Audit events on every write; idempotency keys
-- [ ] Switch frontend to `NEXT_PUBLIC_DATA_MODE=api`; nonce-based CSP via proxy.ts
-- [ ] Lead import (CSV) with duplicate handling
+- [x] Backend service (Fastify 5 instead of NestJS — smaller surface, same module boundaries), config validation, `/healthz`
+- [x] Migration runner: ordered, checksummed, immutable once applied; Postgres via `DATABASE_URL`, PGlite for dev/tests
+- [x] Auth: argon2id, hashed session tokens in httpOnly cookie, TOTP MFA (enrolment + verify, secrets AES-256-GCM encrypted), OTP, password reset, logout revokes session
+- [x] Throttling per account/challenge and per IP (DB-backed), non-enumerating OTP/reset
+- [x] CSRF: required `X-Requested-With` + origin allowlist on state changes
+- [x] Every route checks permission + record scope on the server; out-of-scope → 404 (tested per role)
+- [x] Audit event on every write; optimistic concurrency (409)
+- [x] Leads, clients, activities, follow-ups, convert (one transaction), search, notifications, dashboard
+- [x] Frontend switched to api mode; `create-admin` CLI for the first real user
+- [ ] SMS provider (DLT-registered) — no provider configured; OTP messages are marked "blocked"
+- [ ] Email provider — same
+- [ ] Lead CSV import
+- [ ] Nonce-based CSP
 
-## Sprint 3–6
+## Sprint 3 — Catalogue, documents, quotations
 
-See README roadmap: documents & quotations → delivery → finance ledger & GST → HR, support, automations.
+- [x] Products with price history; versioned tax rules (no overlap, longest HSN-prefix match)
+- [x] BRD/PRD documents: versions, submit/withdraw, maker-checker approval, approved versions immutable
+- [x] Quotations: integer-paise money, CGST/SGST vs IGST by place of supply, discounts, approval thresholds, revisions, freeze after approval, gap-free numbering per FY, PDF
+- [ ] E-signature on quotations
+- [ ] Opportunities table (lead still carries the stage)
+
+## Sprint 4 — Delivery
+
+- [x] Sales order from accepted quotation (exactly one per quote)
+- [x] Projects: activation requires an approved BRD; members, milestones, tasks (board), change requests via approvals
+- [x] UAT items and results; append-only client sign-off
+- [x] Subscriptions with renewals and scheduled billing
+- [ ] Client portal (clients sign off through staff today)
+- [ ] File attachments / object storage
+
+## Sprint 5 — Finance
+
+- [x] Chart of accounts, fiscal periods, journals that must balance at commit (DB trigger), append-only; reversal instead of edit
+- [x] Invoices from sales order / milestone / subscription; frozen after issue; gap-free numbering; PDF
+- [x] Credit notes; receipts with Idempotency-Key, TDS, allocation bounded by the invoice balance
+- [x] Vendors and bills with input GST and TDS payable; bill payments
+- [x] Bank CSV import with dedupe, match / categorise / ignore
+- [x] Period close with checks; postings into closed periods blocked
+- [x] Trial balance, P&L, balance sheet, cash flow, GST summary, receivables/payables ageing — tie-outs tested
+- [ ] E-invoice IRN (IRP) — not integrated; PDFs say so
+- [ ] GST return filing / portal integration
+- [ ] Payment gateway webhooks
+
+## Sprint 6 — People, support, automation
+
+- [x] Departments, employees (bank account encrypted, last 4 shown), holidays, attendance, leave types/requests/balances
+- [x] Salary structures; payroll prepare → submit → approve (different person) → post to ledger; payslips
+- [~] Payroll statutory deductions: PF/ESI/PT computed from configured rates; **TDS is a manual estimate** — rates need CA confirmation before real use
+- [x] Support tickets with SLA policies, comments, breach tracking
+- [x] Automation rules on domain events and scheduled scans, exactly-once per rule + key; run history
+- [x] Admin: users, roles, MFA reset, settings, outbox, audit log, reports hub
+- [ ] Custom roles (14 fixed roles today)
+
+## Cross-cutting
+
+- [x] 48 backend integration tests, 78 frontend unit/component tests, migration checks, two browser e2e scripts — all passing locally
+- [x] `npm audit`: 0 vulnerabilities in root and backend
+- [~] Independent review of Sprint 2–6 code — see docs/security-baseline.md
+- [ ] Managed Postgres, hosting, backups with tested restore — need credentials
+- [ ] Shared rate-limit store (in-memory per instance today) and a separate worker process for multi-instance deploys

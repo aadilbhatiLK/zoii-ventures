@@ -126,6 +126,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     "catalogue.view",
     "documents.view",
     "quotations.view",
+    "orders.view",
     "hr.self_service",
   ],
   account_manager: [

@@ -48,9 +48,9 @@ export async function dashboardSummary(deps: Deps, a: Actor): Promise<DashboardS
     const r = await deps.db.query<{ month: string; invoiced: string | null; collected: string | null }>(
       `WITH months AS (
          SELECT to_char(date_trunc('month', ($2::date - (n || ' months')::interval)), 'YYYY-MM') AS month
-           FROM generate_series(0, 5) n)
+           FROM generate_series(0, 11) n)
        SELECT m.month,
-         (SELECT sum(i.total) FROM invoices i WHERE i.organization_id = $1 AND i.status NOT IN ('draft','cancelled') AND to_char(i.invoice_date, 'YYYY-MM') = m.month) AS invoiced,
+         (SELECT sum(i.taxable_total) FROM invoices i WHERE i.organization_id = $1 AND i.status NOT IN ('draft','cancelled') AND to_char(i.invoice_date, 'YYYY-MM') = m.month) AS invoiced,
          (SELECT sum(rc.amount) FROM receipts rc WHERE rc.organization_id = $1 AND to_char(rc.receipt_date, 'YYYY-MM') = m.month) AS collected
        FROM months m ORDER BY m.month`,
       [a.orgId, ist.toISOString().slice(0, 10)],

@@ -243,7 +243,7 @@ describe("leads & clients", () => {
     const f = await founder.get("/dashboard/summary");
     expect(f.data.scope).toBe("company");
     expect(f.data.revenueSeries.origin).toBe("ledger");
-    expect(f.data.revenueSeries.points).toHaveLength(6);
+    expect(f.data.revenueSeries.points).toHaveLength(12);
   });
 
   it("search and notifications respect scope", async () => {

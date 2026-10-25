@@ -1,7 +1,7 @@
 /** Sprint 3 contracts: catalogue, tax rules, documents, approvals, quotations. Shared by UI and API. */
 import { z } from "zod";
 import { ProductLineSchema } from "../contracts";
-import { DateOnly, HsnSac, Id, Money, Pct, Qty, optText, type BillingCycle } from "./common";
+import { DateOnly, HsnSac, Id, Money, OptDate, Pct, Qty, optText, type BillingCycle } from "./common";
 
 export const ProductInputSchema = z.object({
   code: z.string().trim().toUpperCase().regex(/^[A-Z0-9][A-Z0-9-]{1,30}$/, "Use letters, digits and dashes"),
@@ -68,7 +68,7 @@ export const QuotationLineInputSchema = z.object({
 });
 export const QuotationInputSchema = z.object({
   clientId: Id, leadId: Id.optional().nullable(), documentId: Id.optional().nullable(),
-  quoteDate: DateOnly.optional(), validUntil: DateOnly.optional(),
+  quoteDate: OptDate, validUntil: OptDate,
   notes: optText(4000), terms: optText(8000),
   lines: z.array(QuotationLineInputSchema).min(1, "Add at least one line").max(100),
   expectedUpdatedAt: z.string().optional(),

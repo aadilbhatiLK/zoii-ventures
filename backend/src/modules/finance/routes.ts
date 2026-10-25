@@ -51,7 +51,7 @@ export function financeRoutes(r: Router, deps: Deps) {
   r.get("/bills", async ({ actor, query }) => pay.list(actor, query));
   r.post("/bills", async ({ actor, body }) => pay.create(actor, body), { status: 201 });
   r.get("/bills/:id", async ({ actor, params }) => pay.get(actor, params.id));
-  r.post("/bills/:id/payments", async ({ actor, params, body }) => pay.pay(actor, params.id, body));
+  r.post("/bills/:id/payments", async ({ actor, params, body, req }) => pay.pay(actor, params.id, body, req.headers["idempotency-key"] as string | undefined));
 
   r.post("/bank/import", async ({ actor, body }) => bank.import(actor, body), { status: 201 });
   r.get("/bank/lines", async ({ actor, query }) => bank.lines(actor, query));

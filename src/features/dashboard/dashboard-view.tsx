@@ -26,6 +26,7 @@ import { Skeleton, UserAvatar } from "@/components/ui/misc";
 import { Button } from "@/components/ui/button";
 import { DemoTag, EmptyState, ErrorState } from "@/components/feedback/states";
 import { ChartCard, HorizontalBars, RevenueLineChart } from "@/components/charts/charts";
+import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useLeadList, useUserDirectory } from "@/features/leads/hooks";
 import { FollowUpCell, StageBadge } from "@/features/leads/lead-meta";
@@ -232,9 +233,9 @@ export function DashboardView() {
           <ChartCard
             className="lg:col-span-2"
             title="Invoiced vs collected"
-            description="Last 12 months, before GST"
+            description={s.revenueSeries.origin === "fixture" ? "Last 12 months, before GST" : "Last 12 months · invoiced before GST, collected as received"}
             badge={
-              <DemoTag label={s.revenueSeries.origin === "fixture" ? "Demo fixture" : "Ledger"} />
+              s.revenueSeries.origin === "fixture" ? <DemoTag label="Demo fixture" /> : <Badge tone="success">From the ledger</Badge>
             }
             table={{
               columns: ["Month", "Invoiced", "Collected"],

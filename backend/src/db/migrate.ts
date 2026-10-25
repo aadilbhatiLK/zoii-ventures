@@ -1,9 +1,20 @@
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Db } from "./index";
 
-export const MIGRATIONS_DIR = join(import.meta.dirname, "..", "..", "..", "database", "migrations");
+/** database/migrations, found by walking up from this file (works from src/ and from the dist bundle). */
+function findMigrations(): string {
+  if (process.env.MIGRATIONS_DIR) return process.env.MIGRATIONS_DIR;
+  let dir = import.meta.dirname;
+  for (let i = 0; i < 6; i++) {
+    const c = join(dir, "database", "migrations");
+    if (existsSync(c)) return c;
+    dir = dirname(dir);
+  }
+  throw new Error("database/migrations not found; set MIGRATIONS_DIR.");
+}
+export const MIGRATIONS_DIR = findMigrations();
 
 /**
  * Forward-only migration runner. Each file runs in its own transaction together with its
