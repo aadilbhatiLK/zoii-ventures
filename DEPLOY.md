@@ -72,8 +72,9 @@ Use Node 22 locally. Work from the repo root (`~/Developer/zoii-ventures`).
    ```
 7. Restart and check:
    ```bash
-   ssh kuicko2 'pm2 restart zoii-bos-api --update-env && sleep 3 && curl -s localhost:4200/healthz && pm2 logs zoii-bos-api --lines 15 --nostream'
+   ssh kuicko2 'cd /opt/apps/zoii-bos/repo/backend && set -a && . /opt/apps/zoii-bos/api.env && set +a && pm2 restart zoii-bos-api --update-env && sleep 3 && curl -s localhost:4200/healthz && pm2 logs zoii-bos-api --lines 15 --nostream'
    ```
+   Load `api.env` into the shell first: pm2 keeps its own copy of the environment, and real environment variables override node's `--env-file`, so an edit to `api.env` only takes effect when `--update-env` sees it.
 
 ## Deploy the web app
 
@@ -88,7 +89,7 @@ It is aliased to https://zoii-business-os.vercel.app. If `NEXT_PUBLIC_*` values 
 ```bash
 ssh kuicko2 'f=/opt/apps/zoii-bos/backups/zoii_bos_$(date +%Y%m%d_%H%M).dump; mkdir -p /opt/apps/zoii-bos/backups; sudo -u postgres pg_dump -Fc zoii_bos > $f && ls -l $f && pg_restore -l $f | wc -l'
 ```
-This makes a dump and checks it can be read back. There is no scheduled backup yet, and no tested restore, so the dump is only as trustworthy as that check.
+This makes a dump and checks it can be read back. Dumps (and copies of `api.env` taken before edits) live in `/opt/apps/zoii-bos/backups` (mode 700). The first one was taken on 2026-10-27 before the stabilization deploy. There is no scheduled backup yet, and no tested restore, so the dump is only as trustworthy as that check.
 
 ## Verify after a deploy
 
