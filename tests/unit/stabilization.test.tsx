@@ -97,3 +97,11 @@ describe("web-tier proxy for /api/v1", () => {
     expect(verifyClientIp(SECRET, signed, Math.floor(Date.now() / 1000))).toBe("203.0.113.5");
   });
 });
+
+describe("MFA policy", () => {
+  it("accountants need MFA, like the rest of finance", async () => {
+    const { requiresMfa } = await import("@/lib/permissions");
+    expect(requiresMfa({ roles: ["accountant"] })).toBe(true);
+    expect(requiresMfa({ roles: ["sales_executive"] })).toBe(false);
+  });
+});

@@ -52,7 +52,7 @@ export interface DocumentDetail extends DocumentSummary { versions: DocumentVers
 
 // ---------- approvals ----------
 export interface ApprovalRequest {
-  id: string; entityType: "document_version" | "quotation" | "change_request" | "payroll_run" | "leave_request" | "journal_entry";
+  id: string; entityType: "document_version" | "quotation" | "change_request" | "payroll_run" | "leave_request" | "journal_entry" | "period_change";
   entityId: string; title: string; reason: string; requiredPermission: string; status: "pending" | "approved" | "rejected" | "cancelled";
   requestedBy: string; requestedAt: string; decidedBy: string | null; decidedAt: string | null; decisionNote: string | null; href: string;
   canDecide: boolean;

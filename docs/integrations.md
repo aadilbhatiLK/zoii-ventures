@@ -26,7 +26,7 @@ Last checked against the code on 2026-10-27. This lists what is **not** connecte
 | Opportunities table | Not built: the lead carries the stage. |
 | Scheduled subscription billing | **Manual.** Finance runs it from Invoices → *Run billing*; the worker does not schedule it. |
 | Payroll TDS | **Manual estimate** typed in by HR. PF/ESI/PT come from configured rates; confirm all rates with a CA before real payroll. |
-| Housekeeping | Expired sessions, auth attempts, challenges and processed events are never purged. |
+| Housekeeping | Automatic: old sessions, auth attempts, challenges, idempotency keys and processed events are purged (see DEPLOY.md). |
 | Client page totals | The client's Commercial/Projects/Support tabs list live records; lifetime value isn't totalled. |
 | Dashboards for finance, delivery and HR roles | Link to the live modules; they don't summarise them yet. |
 

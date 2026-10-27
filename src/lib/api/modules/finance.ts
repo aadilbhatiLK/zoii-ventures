@@ -94,4 +94,8 @@ export interface GstSummary {
   netPayable: { cgst: string; sgst: string; igst: string; total: string };
   b2b: { clientName: string; gstin: string; invoices: number; taxable: string; tax: string }[];
 }
-export interface Period { month: string; status: "open" | "closed"; closedBy: string | null; closedAt: string | null; checks?: { label: string; ok: boolean; detail: string }[] }
+export interface Period {
+  month: string; status: "open" | "closed"; closedBy: string | null; closedAt: string | null; checks?: { label: string; ok: boolean; detail: string }[];
+  /** A close/reopen waiting for a second person's approval (maker-checker). */
+  pending: { action: "close" | "reopen"; requestedBy: string; requestedAt: string } | null;
+}

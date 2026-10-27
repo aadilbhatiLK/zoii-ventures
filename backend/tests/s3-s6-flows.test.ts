@@ -324,12 +324,20 @@ describe("Sprint 5 — finance", () => {
 
   it("closed periods reject postings until reopened", async () => {
     const bank = await sys("bank"), cap = await sys("capital");
+    // Closing is maker-checker: finance requests, someone else approves.
     const close = await as.fin.post("/finance/periods/2026-09/close", {});
     expect(close.status).toBe(200);
+    expect(close.data.status).toBe("pending_approval");
+    const decide = async (title: string) => {
+      const ap = (await as.founder.get("/approvals")).data.find((x: { title: string }) => x.title === title);
+      expect((await as.founder.post(`/approvals/${ap.id}/decide`, { decision: "approve" })).status).toBe(200);
+    };
+    await decide("Close 2026-09");
     const post = await as.fin.postKeyed("/finance/journals", { entryDate: "2026-09-15", memo: "Late entry", lines: [{ accountId: bank, debit: "1" }, { accountId: cap, credit: "1" }] });
     expect(post.status).toBe(409);
     expect((await as.fin.post("/finance/periods/2026-10/close", {})).status).toBe(409); // current month
     expect((await as.fin.post("/finance/periods/2026-09/reopen", { reason: "Late vendor bill found" })).status).toBe(200);
+    await decide("Reopen 2026-09");
   });
 
   it("subscription billing creates one draft per period", async () => {

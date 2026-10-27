@@ -79,6 +79,8 @@ export const MFA_REQUIRED_ROLES: readonly Role[] = [
   "super_admin",
   "founder",
   "finance_manager",
+  // Issues invoices, records receipts and reconciles the bank: same exposure as finance.
+  "accountant",
   "hr_manager",
   "auditor",
 ];

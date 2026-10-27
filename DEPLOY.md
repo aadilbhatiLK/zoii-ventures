@@ -21,15 +21,10 @@ How the pieces connect:
 
 Other apps on the same VM that must not be touched: `kuicko-*`, `somnath-sales-api`, `zoii-api` (the POS), `zoii-mock-kuicko`. Ports 3010–3019, 3041, 4100, 4199 are taken. This app uses 4200.
 
-## Local files that are not in git
+## Vercel project files
 
-- `vercel.json` (the `/api/v1` rewrite) and `.vercel/` (link to the Vercel project). If the repo is re-cloned, recreate them:
-  ```bash
-  cat > vercel.json <<'EOF'
-  { "rewrites": [ { "source": "/api/v1/:path*", "destination": "https://zoii-bos-api.98.70.24.252.nip.io/api/v1/:path*" } ] }
-  EOF
-  npx vercel link --yes --project zoii-business-os
-  ```
+- `vercel.json` is in git (since 2026-10-27). It must not contain a `services` block: `vercel link` once added one, which deployed a second, broken copy of the backend at `/api/backend`.
+- `.vercel/` (link to the Vercel project) is local only. After a re-clone: `npx vercel link --yes --project zoii-business-os`, then check `vercel.json` is unchanged (`git diff vercel.json`).
 - Vercel production env vars (already set): `NEXT_PUBLIC_DATA_MODE=api`, `NEXT_PUBLIC_API_BASE_URL=https://zoii-business-os.vercel.app`.
 
 ## Security rules for production changes
@@ -136,11 +131,17 @@ Roll back by unsetting `API_PROXY_ORIGIN` in Vercel and restoring the `vercel.js
 - Code: rsync the previous commit (`git checkout <sha>`), rebuild, `pm2 restart zoii-bos-api`. For the web app, promote the previous deployment in Vercel (`npx vercel rollback`).
 - Database: migrations are forward-only. If one must be undone, restore the pre-migration dump into a scratch database first, check it, and get explicit approval before touching the live one.
 
+## Behaviour to know about
+
+- Closing or reopening a fiscal period is a request: a **different** person with `finance.period.close` approves it in Approvals. With only one such user, periods can't be closed.
+- Accountants must enrol TOTP, like finance managers.
+- The worker purges, at most hourly: sessions and auth attempts older than 30 days, auth challenges older than 7 days, idempotency keys older than 30 days, processed domain events older than 90 days. Audit, journal and business records are never purged.
+
 ## Known gaps (as of 2026-10-27)
 
 - No scheduled backups. The dump/restore procedure above was drilled on a local Postgres 16 copy with demo data (75 tables, identical row counts, triggers intact); it has not been run against production.
 - The app's DB role owns the database and runs migrations; the security policy prefers separate roles for app, migrations and reporting.
 - Rate limits are in memory, so run a single API instance only. The worker runs inside the API process.
-- Subscription billing is manual (Invoices → Run billing); expired sessions and auth attempts are never purged.
+- Subscription billing is manual (Invoices → Run billing).
 - Not penetration-tested. No error tracking or uptime alerts.
 - No SMS or email provider: OTP sign-in is off and invites/resets are handed over as one-time links. Full list: `docs/integrations.md`.

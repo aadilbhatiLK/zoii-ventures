@@ -1,8 +1,46 @@
 import type { AgeingRow, GstSummary, Period, ReportRow } from "@/lib/api/modules/finance";
 import { fromPaise, sum, toPaise } from "@/lib/money";
-import { type Actor, type Deps, audit, need, todayIst } from "../../lib/context";
-import { conflict, invalid } from "../../lib/errors";
+import type { Queryable } from "../../db";
+import { type Actor, type Deps, audit, need, notify, todayIst } from "../../lib/context";
+import { conflict, forbidden, invalid } from "../../lib/errors";
 import { iso } from "../../lib/query";
+import { registerApprovalHandler, requestApproval } from "../sales/approvals";
+
+type Check = { label: string; ok: boolean; detail: string };
+
+async function periodChecks(q: Queryable, orgId: string, month: string): Promise<Check[]> {
+  const drafts = (await q.query<{ n: number }>(`SELECT count(*)::int AS n FROM invoices WHERE organization_id = $1 AND status = 'draft' AND to_char(invoice_date, 'YYYY-MM') = $2`, [orgId, month])).rows[0].n;
+  const bank = (await q.query<{ n: number }>(`SELECT count(*)::int AS n FROM bank_statement_lines WHERE organization_id = $1 AND status = 'unmatched' AND to_char(txn_date, 'YYYY-MM') = $2`, [orgId, month])).rows[0].n;
+  const payroll = (await q.query<{ n: number }>(`SELECT count(*)::int AS n FROM payroll_runs WHERE organization_id = $1 AND month = $2 AND status IN ('draft','approved')`, [orgId, month])).rows[0].n;
+  return [
+    { label: "Draft invoices dated in the month", ok: drafts === 0, detail: drafts ? `${drafts} draft(s) — issue or delete them` : "None" },
+    { label: "Unreconciled bank lines", ok: bank === 0, detail: bank ? `${bank} line(s) to match` : "All matched" },
+    { label: "Payroll posted", ok: payroll === 0, detail: payroll ? "A payroll run for this month isn't posted yet" : "Nothing pending" },
+  ];
+}
+
+// Closing or reopening a period takes a second person (maker-checker), applied when approved.
+registerApprovalHandler("period_change", async (q, a, id, approved) => {
+  const r = (await q.query<{ organization_id: string; month: string; action: "close" | "reopen"; reason: string | null; forced: boolean; status: string; requested_by: string }>(
+    `SELECT * FROM period_change_requests WHERE id = $1 AND organization_id = $2 FOR UPDATE`, [id, a.orgId])).rows[0];
+  if (!r || r.status !== "pending") throw conflict("This period request was already decided.");
+  if (r.requested_by === a.userId) throw forbidden("Someone else has to approve your own period request.");
+  await q.query(`UPDATE period_change_requests SET status = $2, decided_by = $3, decided_at = now() WHERE id = $1`, [id, approved ? "approved" : "rejected", a.userId]);
+  if (!approved) return;
+  if (r.action === "close") {
+    const checks = await periodChecks(q, r.organization_id, r.month);
+    if (checks.some((c) => !c.ok) && !r.forced) throw conflict(`No longer ready to close: ${checks.filter((c) => !c.ok).map((c) => c.detail).join("; ")}.`);
+    await q.query(
+      `INSERT INTO fiscal_periods (organization_id, month, status, closed_by, closed_at) VALUES ($1,$2,'closed',$3,now())
+       ON CONFLICT (organization_id, month) DO UPDATE SET status = 'closed', closed_by = $3, closed_at = now()`, [r.organization_id, r.month, a.userId]);
+    await audit(q, a, "period.close", "fiscal_period", null, { month: r.month, checks, forced: r.forced, requestedBy: r.requested_by, requestId: id });
+  } else {
+    const done = await q.query(`UPDATE fiscal_periods SET status = 'open', closed_by = NULL, closed_at = NULL WHERE organization_id = $1 AND month = $2 AND status = 'closed' RETURNING month`, [r.organization_id, r.month]);
+    if (!done.rows.length) throw conflict("That period isn't closed any more.");
+    await audit(q, a, "period.reopen", "fiscal_period", null, { month: r.month, reason: r.reason, requestedBy: r.requested_by, requestId: id });
+  }
+  await notify(q, r.organization_id, r.requested_by, { kind: "system", title: `${r.month} ${r.action === "close" ? "closed" : "reopened"}`, href: "/finance/periods" });
+});
 
 const D = /^\d{4}-\d{2}-\d{2}$/;
 const P = (v: string | null | undefined) => toPaise(v ?? "0");
@@ -159,46 +197,58 @@ export class ReportService {
   // ---------- periods ----------
   async periods(a: Actor): Promise<Period[]> {
     need(a, "finance.view");
-    const r = await this.db.query<{ month: string; status: Period["status"]; closed_by: string | null; closed_at: Date | null }>(
-      `SELECT month, status, closed_by, closed_at FROM fiscal_periods WHERE organization_id = $1 ORDER BY month DESC LIMIT 36`, [a.orgId]);
-    return r.rows.map((p) => ({ month: p.month, status: p.status, closedBy: p.closed_by, closedAt: iso(p.closed_at) }));
+    // Months with a pending close show up even before they have a fiscal_periods row.
+    const r = await this.db.query<{ month: string; status: Period["status"] | null; closed_by: string | null; closed_at: Date | null; action: "close" | "reopen" | null; requested_by: string | null; requested_at: Date | null }>(
+      `SELECT m.month, p.status, p.closed_by, p.closed_at, pr.action, pr.requested_by, pr.requested_at
+         FROM (SELECT month FROM fiscal_periods WHERE organization_id = $1 UNION SELECT month FROM period_change_requests WHERE organization_id = $1 AND status = 'pending') m
+         LEFT JOIN fiscal_periods p ON p.organization_id = $1 AND p.month = m.month
+         LEFT JOIN period_change_requests pr ON pr.organization_id = $1 AND pr.month = m.month AND pr.status = 'pending'
+        ORDER BY m.month DESC LIMIT 36`, [a.orgId]);
+    return r.rows.map((p) => ({
+      month: p.month, status: p.status ?? "open", closedBy: p.closed_by, closedAt: iso(p.closed_at),
+      pending: p.action ? { action: p.action, requestedBy: p.requested_by!, requestedAt: iso(p.requested_at)! } : null,
+    }));
   }
 
-  async closeChecks(orgId: string, month: string) {
-    const drafts = (await this.db.query<{ n: number }>(`SELECT count(*)::int AS n FROM invoices WHERE organization_id = $1 AND status = 'draft' AND to_char(invoice_date, 'YYYY-MM') = $2`, [orgId, month])).rows[0].n;
-    const bank = (await this.db.query<{ n: number }>(`SELECT count(*)::int AS n FROM bank_statement_lines WHERE organization_id = $1 AND status = 'unmatched' AND to_char(txn_date, 'YYYY-MM') = $2`, [orgId, month])).rows[0].n;
-    const payroll = (await this.db.query<{ n: number }>(`SELECT count(*)::int AS n FROM payroll_runs WHERE organization_id = $1 AND month = $2 AND status IN ('draft','approved')`, [orgId, month])).rows[0].n;
-    return [
-      { label: "Draft invoices dated in the month", ok: drafts === 0, detail: drafts ? `${drafts} draft(s) — issue or delete them` : "None" },
-      { label: "Unreconciled bank lines", ok: bank === 0, detail: bank ? `${bank} line(s) to match` : "All matched" },
-      { label: "Payroll posted", ok: payroll === 0, detail: payroll ? "A payroll run for this month isn't posted yet" : "Nothing pending" },
-    ];
+  closeChecks(orgId: string, month: string) {
+    return periodChecks(this.db, orgId, month);
   }
 
+  /** Asks a second person to close the month; nothing is locked until they approve. */
   async closePeriod(a: Actor, month: string, body: { force?: boolean }) {
     need(a, "finance.period.close");
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw invalid("Month is YYYY-MM.");
     if (month >= this.today().slice(0, 7)) throw conflict("Only past months can be closed.");
     const checks = await this.closeChecks(a.orgId, month);
     if (checks.some((c) => !c.ok) && !body?.force) throw conflict(`Not ready to close: ${checks.filter((c) => !c.ok).map((c) => c.detail).join("; ")}. Fix these or close anyway.`);
-    await this.db.tx(async (q) => {
-      await q.query(
-        `INSERT INTO fiscal_periods (organization_id, month, status, closed_by, closed_at) VALUES ($1,$2,'closed',$3,now())
-         ON CONFLICT (organization_id, month) DO UPDATE SET status = 'closed', closed_by = $3, closed_at = now()`, [a.orgId, month, a.userId]);
-      await audit(q, a, "period.close", "fiscal_period", null, { month, checks, forced: !!body?.force });
-    });
-    return { month, status: "closed" as const, checks };
+    const requestId = await this.request(a, month, "close", { forced: !!body?.force, checks });
+    return { month, status: "pending_approval" as const, checks, requestId };
   }
 
   async reopenPeriod(a: Actor, month: string, body: { reason?: string }) {
     need(a, "finance.period.close");
     const reason = String(body?.reason ?? "").trim();
     if (reason.length < 5) throw invalid("Explain why the period is being reopened.", { reason: ["Required"] });
-    await this.db.tx(async (q) => {
-      const r = await q.query(`UPDATE fiscal_periods SET status = 'open', closed_by = NULL, closed_at = NULL WHERE organization_id = $1 AND month = $2 AND status = 'closed' RETURNING month`, [a.orgId, month]);
-      if (!r.rows.length) throw conflict("That period isn't closed.");
-      await audit(q, a, "period.reopen", "fiscal_period", null, { month, reason });
+    const closed = (await this.db.query(`SELECT 1 FROM fiscal_periods WHERE organization_id = $1 AND month = $2 AND status = 'closed'`, [a.orgId, month])).rows.length;
+    if (!closed) throw conflict("That period isn't closed.");
+    const requestId = await this.request(a, month, "reopen", { reason });
+    return { month, status: "pending_approval" as const, requestId };
+  }
+
+  private async request(a: Actor, month: string, action: "close" | "reopen", d: { reason?: string; forced?: boolean; checks?: Check[] }) {
+    return this.db.tx(async (q) => {
+      const r = await q.query<{ id: string }>(
+        `INSERT INTO period_change_requests (organization_id, month, action, reason, forced, checks, requested_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [a.orgId, month, action, d.reason ?? null, !!d.forced, JSON.stringify(d.checks ?? []), a.userId],
+      ).catch((e) => { if ((e as { code?: string }).code === "23505") throw conflict(`A request for ${month} is already waiting for approval.`); throw e; });
+      const id = r.rows[0].id;
+      await requestApproval(q, a, {
+        entityType: "period_change", entityId: id, permission: "finance.period.close",
+        title: `${action === "close" ? "Close" : "Reopen"} ${month}`,
+        reason: action === "close" ? (d.forced ? "Close requested with open checks (forced)" : "All close checks passed") : `Reopen: ${d.reason}`,
+      });
+      await audit(q, a, `period.${action}_requested`, "fiscal_period", null, { month, requestId: id, forced: d.forced, reason: d.reason });
+      return id;
     });
-    return { month, status: "open" as const };
   }
 }

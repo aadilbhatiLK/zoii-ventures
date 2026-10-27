@@ -98,7 +98,7 @@ async function fire(deps: Deps, rule: Rule, dedupeKey: string, s: Subject) {
 export async function runWorkerOnce(deps: Deps, onlyOrgId?: string) {
   const db = deps.db;
   const today = todayIst(deps.now());
-  const stats = { events: 0, fired: 0, scheduled: 0, expiredQuotes: 0, outbox: 0 };
+  const stats = { events: 0, fired: 0, scheduled: 0, expiredQuotes: 0, outbox: 0, purged: 0 };
   // run-now from the UI is scoped to the caller's organisation; the background worker passes no org.
   const rules = (await db.query<Rule>(`SELECT * FROM automation_rules WHERE enabled AND ($1::uuid IS NULL OR organization_id = $1)`, [onlyOrgId ?? null])).rows;
   const byTrigger = (org: string, t: string) => rules.filter((r) => r.organization_id === org && r.trigger === t);
@@ -138,6 +138,7 @@ export async function runWorkerOnce(deps: Deps, onlyOrgId?: string) {
   if (!onlyOrgId) {
     stats.expiredQuotes = await db.tx((q) => QuotationService.expire(q, today));
     await db.tx((q) => SubscriptionService.scan(q, today));
+    stats.purged = await purgeExpired(deps);
   }
 
   // Outbox delivery through the configured provider; without one, messages are marked blocked (visible to admins).
@@ -160,6 +161,31 @@ export async function runWorkerOnce(deps: Deps, onlyOrgId?: string) {
     }
   }
   return stats;
+}
+
+/**
+ * Retention for security/plumbing rows that nothing references once they're old. Business
+ * records, audit events, journals and approvals are never purged. Runs at most hourly.
+ */
+export const RETENTION_DAYS = { sessions: 30, authAttempts: 30, authChallenges: 7, idempotencyKeys: 30, domainEvents: 90 };
+let lastPurge = 0;
+export async function purgeExpired(deps: Deps, force = false): Promise<number> {
+  const now = deps.now();
+  if (!force && now.getTime() - lastPurge < 3_600_000) return 0;
+  lastPurge = now.getTime();
+  const ago = (days: number) => new Date(now.getTime() - days * 86_400_000);
+  const R = RETENTION_DAYS;
+  const steps: [string, Date][] = [
+    // Sessions and challenges live hours at most, so expiry is a safe cut-off whether or not they were used.
+    [`DELETE FROM sessions WHERE expires_at < $1`, ago(R.sessions)],
+    [`DELETE FROM auth_attempts WHERE occurred_at < $1`, ago(R.authAttempts)],
+    [`DELETE FROM auth_challenges WHERE expires_at < $1`, ago(R.authChallenges)],
+    [`DELETE FROM idempotency_keys WHERE created_at < $1`, ago(R.idempotencyKeys)],
+    [`DELETE FROM domain_events WHERE processed_at IS NOT NULL AND processed_at < $1`, ago(R.domainEvents)],
+  ];
+  let n = 0;
+  for (const [sql, before] of steps) n += (await deps.db.query(sql, [before])).rowCount;
+  return n;
 }
 
 interface RuleRow extends Rule { created_at: Date; last_run: Date | null; runs: number }

@@ -96,4 +96,7 @@ Each item has a regression test in `backend/tests/stabilization-phase1.test.ts`,
 - [x] Admin-issued one-time invite/reset links when no email provider is configured
 - [x] `npm run dev` / `migrate` / `seed:demo` / `create-admin` work (esbuild instead of tsx)
 - [x] Stale "arrives in Sprint N" placeholders replaced; client tabs show live records; dashboard labels real ledger data correctly
-- [ ] Scheduled subscription billing and housekeeping purges — need approval (they change production behaviour)
+- [x] Period close/reopen is maker-checker (migration 0009); accountants require MFA; retention purges in the worker
+- [x] `vercel.json` tracked, without the stray `services` block
+- [ ] Scheduled subscription billing — deferred until there are paying subscriptions (drafts only, off by default)
+- [ ] Scheduled, off-VM database backups — waiting on a destination

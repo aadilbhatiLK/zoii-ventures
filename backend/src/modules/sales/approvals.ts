@@ -18,6 +18,7 @@ const hrefs: Record<EntityType, (id: string, parentId: string | null) => string>
   payroll_run: (id) => `/people/payroll/${id}`,
   leave_request: () => `/people/attendance`,
   journal_entry: (id) => `/finance/ledger?entry=${id}`,
+  period_change: () => "/finance/periods",
 };
 const PARENT_SQL = `CASE ar.entity_type
     WHEN 'document_version' THEN (SELECT document_id::text FROM document_versions WHERE id = ar.entity_id)

@@ -149,7 +149,7 @@ export const DEMO_USERS: User[] = [
     roles: ["accountant"],
     teamId: "t_finance",
     avatarHue: 120,
-    mfaEnrolled: false,
+    mfaEnrolled: true,
   },
   {
     id: "u_dev",
