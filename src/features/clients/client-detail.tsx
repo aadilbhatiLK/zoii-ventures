@@ -5,16 +5,11 @@ import {
   ArrowLeft,
   BadgeCheck,
   Crown,
-  FileText,
-  FolderKanban,
   Globe,
-  LifeBuoy,
   Mail,
   MapPin,
   Pencil,
   Phone,
-  Receipt,
-  Repeat,
   Target,
 } from "lucide-react";
 import { useRecordBreadcrumb } from "@/components/layout/breadcrumbs";
@@ -32,6 +27,7 @@ import { CLIENT_CATEGORIES, PRODUCT_LINES } from "@/lib/api/contracts";
 import { isApiError, userMessage } from "@/lib/api/errors";
 import { formatDate } from "@/lib/formatting";
 import { validateGstin } from "@/lib/validation/gstin";
+import { ClientCommercial, ClientProjects, ClientSupport } from "./client-records";
 import { useClient, useClientTimeline } from "./hooks";
 import { STATUS_LABEL, STATUS_TONE } from "./clients-view";
 
@@ -41,24 +37,6 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <dt className="text-fg-muted">{label}</dt>
       <dd className="min-w-0 break-words">{children}</dd>
     </div>
-  );
-}
-
-function Planned({
-  icon,
-  title,
-  sprint,
-  text,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  sprint: number;
-  text: string;
-}) {
-  return (
-    <Card>
-      <EmptyState icon={icon} title={`${title} — arrives in Sprint ${sprint}`} description={text} />
-    </Card>
   );
 }
 
@@ -229,11 +207,10 @@ export function ClientDetail({ clientId }: { clientId: string }) {
                 </CardHeader>
                 <CardContent className="space-y-2 text-[13px]">
                   <p className="text-fg-muted">
-                    Lifetime value, receivables and subscriptions are calculated from invoices and
-                    the ledger. No transactions exist yet, so nothing is shown rather than an
-                    estimate.
+                    Lifetime value isn&apos;t totalled on this page yet. The Commercial tab lists
+                    this client&apos;s quotations, invoices (with outstanding amounts) and
+                    subscriptions from the live records.
                   </p>
-                  <p className="text-fg-subtle text-xs">Arrives with Finance (Sprint 5).</p>
                 </CardContent>
               </Card>
               <Card>
@@ -331,41 +308,14 @@ export function ClientDetail({ clientId }: { clientId: string }) {
           </Card>
         </TabsContent>
 
-        <TabsContent value="commercial" className="grid gap-4 pt-4 md:grid-cols-3">
-          <Planned
-            icon={<Receipt />}
-            title="Quotations"
-            sprint={3}
-            text="Versioned quotations with approval and PDF output will be linked here."
-          />
-          <Planned
-            icon={<FileText />}
-            title="Invoices & payments"
-            sprint={5}
-            text="GST invoices, receipts and outstanding balance from the ledger."
-          />
-          <Planned
-            icon={<Repeat />}
-            title="Subscriptions"
-            sprint={4}
-            text="Active SaaS plans, renewals and licences."
-          />
+        <TabsContent value="commercial" className="pt-4">
+          <ClientCommercial clientId={c.id} />
         </TabsContent>
         <TabsContent value="projects" className="pt-4">
-          <Planned
-            icon={<FolderKanban />}
-            title="Projects"
-            sprint={4}
-            text="Projects created from accepted quotations, with milestones and sign-off."
-          />
+          <ClientProjects clientId={c.id} />
         </TabsContent>
         <TabsContent value="support" className="pt-4">
-          <Planned
-            icon={<LifeBuoy />}
-            title="Support tickets"
-            sprint={6}
-            text="Tickets, SLAs and AMC coverage for this client."
-          />
+          <ClientSupport clientId={c.id} />
         </TabsContent>
       </Tabs>
     </div>

@@ -27,9 +27,13 @@ const UserAdminInput = z.object({
   teamId: z.string().nullable().optional(),
   roles: z.array(RoleSchema).min(1, "Pick at least one role"),
 });
-const UserPatch = UserAdminInput.omit({ email: true }).partial().extend({
+// No default title on update: a patch that doesn't mention the title must leave it alone.
+const UserPatch = UserAdminInput.omit({ email: true }).extend({ title: z.string().trim().max(120) }).partial().extend({
   status: z.enum(["active", "suspended", "deactivated"]).optional(),
 });
+
+/** Emailed reset links are short-lived; one an admin hands over in person gets a working day. */
+const resetLinkMinutes = (deps: Deps) => (deps.config.emailProvider === "none" ? 24 * 60 : 60);
 
 function toAdminUser(r: UserRow) {
   return { ...toUser(r), status: r.status, lastLoginAt: r.last_login_at ? new Date(r.last_login_at).toISOString() : null, createdAt: new Date(r.created_at).toISOString() };
@@ -98,8 +102,10 @@ export function userRoutes(r: Router, deps: Deps) {
       await audit(q, actor, "user.invite", "user", u.rows[0].id, { email: d.email, roles: d.roles });
       return u.rows[0].id;
     });
-    const sent = await new AuthService(deps).sendResetLink(id, actor.orgId, d.email, "invite", 72 * 60);
-    return { user: toAdminUser((await getUserRow(db, id))!), inviteSent: sent };
+    const link = await new AuthService(deps).sendResetLink(id, actor.orgId, d.email, "invite", 72 * 60);
+    await audit(db, actor, "user.invite_link", "user", id, { delivery: link.sent ? "email" : "manual", expiresAt: link.expiresAt });
+    // With no email provider the admin hands the one-time link over themselves; it isn't stored.
+    return { user: toAdminUser((await getUserRow(db, id))!), inviteSent: link.sent, ...(link.link ? { manualLink: link.link, linkExpiresAt: link.expiresAt } : {}) };
   }, { status: 201 });
 
   r.patch("/admin/users/:id", async ({ actor, body, params }) => {
@@ -164,9 +170,17 @@ export function userRoutes(r: Router, deps: Deps) {
     need(actor, "users.manage_roles");
     const target = isUuid(params.id) ? await getUserRow(db, params.id) : null;
     if (!target || target.organization_id !== actor.orgId) throw notFound("User");
-    const sent = await new AuthService(deps).sendResetLink(target.id, actor.orgId, target.email, target.status === "invited" ? "invite" : "password_reset", 60);
-    await audit(db, actor, "user.reset_link", "user", target.id);
-    return { sent };
+    if (target.id === actor.userId) throw conflict("Change your own password from your profile instead.");
+    // A manual link is enough to take over an account without MFA, so the same rule as role
+    // changes applies: only a super admin can issue one for a super admin or founder.
+    guardRoleGrant(actor, [], target);
+    if (target.status !== "active" && target.status !== "invited") throw conflict("Reactivate this account before sending a link.");
+    const invite = target.status === "invited";
+    const link = await new AuthService(deps).sendResetLink(target.id, actor.orgId, target.email, invite ? "invite" : "password_reset", invite ? 72 * 60 : resetLinkMinutes(deps));
+    await audit(db, actor, "user.reset_link", "user", target.id, { delivery: link.sent ? "email" : "manual", expiresAt: link.expiresAt });
+    if (!invite)
+      await notify(db, actor.orgId, target.id, { kind: "system", title: "A password reset link was issued for your account", body: "If you didn't ask for this, contact your administrator immediately.", href: "/me" });
+    return { sent: link.sent, ...(link.link ? { manualLink: link.link, linkExpiresAt: link.expiresAt } : {}) };
   });
 
   r.post("/admin/teams", async ({ actor, body }) => {

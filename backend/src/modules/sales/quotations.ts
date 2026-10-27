@@ -187,10 +187,18 @@ export class QuotationService {
       if (validUntil < quoteDate) throw invalid("Validity must end on or after the quote date.", { validUntil: ["Before quote date"] });
       const h = await this.header(q, a, d.clientId);
       await this.checkRefs(q, a, d);
+      // An omitted leadId/documentId keeps the existing link (the editor never sends leadId); null clears it.
+      const leadId = d.leadId !== undefined ? d.leadId : r.lead_id;
+      const documentId = d.documentId !== undefined ? d.documentId : r.document_id;
+      if (d.documentId === undefined && documentId && d.clientId !== r.client_id) await this.checkRefs(q, a, { clientId: d.clientId, documentId });
+      if (d.leadId === undefined && leadId && d.clientId !== r.client_id) {
+        const lead = (await q.query<{ client_id: string | null }>(`SELECT client_id FROM leads WHERE id = $1`, [leadId])).rows[0];
+        if (lead?.client_id && lead.client_id !== d.clientId) throw invalid("The linked lead converted into another client.", { leadId: ["Different client"] });
+      }
       const priced = await priceLines(q, a.orgId, d.lines, quoteDate, h.supplyType);
       await q.query(
         `UPDATE quotations SET client_id=$2, lead_id=$3, document_id=$4, quote_date=$5, valid_until=$6, supplier_state=$7, place_of_supply=$8, supply_type=$9, notes=$10, terms=$11, approval_reasons='{}' WHERE id = $1`,
-        [id, d.clientId, d.leadId ?? null, d.documentId ?? null, quoteDate, validUntil, h.sup, h.pos, h.supplyType, d.notes ?? null, d.terms ?? null],
+        [id, d.clientId, leadId ?? null, documentId ?? null, quoteDate, validUntil, h.sup, h.pos, h.supplyType, d.notes ?? null, d.terms ?? null],
       );
       await this.writeLines(q, a.orgId, id, priced);
       await recordEditor(q, a, "quotation", id);

@@ -136,7 +136,7 @@ export function ClientsView() {
         size: 110,
         enableSorting: false,
         cell: () => (
-          <Tooltip content="Receivables come from the finance ledger (Sprint 5). Not estimated.">
+          <Tooltip content="Not shown in this list. Open the client's Commercial tab for invoices and outstanding amounts.">
             <span className="text-fg-subtle">—</span>
           </Tooltip>
         ),

@@ -111,18 +111,25 @@ export class InvoiceService {
     return r.rows[0].id;
   }
 
+  /** The client must be ours, and a sales order must be this client's (same checks on create and edit). */
+  private async checkRefs(q: Queryable, a: Actor, d: { clientId: string; salesOrderId?: string | null }) {
+    if (!(await q.query(`SELECT 1 FROM clients WHERE id = $1 AND organization_id = $2`, [d.clientId, a.orgId])).rows.length) throw invalid("Unknown client.", { clientId: ["Unknown"] });
+    if (d.salesOrderId && !(await q.query(`SELECT 1 FROM sales_orders WHERE id = $1 AND client_id = $2 AND organization_id = $3`, [d.salesOrderId, d.clientId, a.orgId])).rows.length)
+      throw invalid("That sales order belongs to another client.", { salesOrderId: ["Different client"] });
+  }
+
   /**
    * Billing cap per sales order, compared pre-tax (tax follows from taxable value):
    * taxable billed on the order ≤ the order's taxable value + approved change requests.
    */
-  private async checkOrderCap(q: Queryable, salesOrderId: string, invoiceId: string) {
+  private async checkOrderCap(q: Queryable, orgId: string, salesOrderId: string, invoiceId: string) {
     const so = (await q.query<{ taxable_total: string; status: string; billed: string | null; extra: string | null; this_taxable: string }>(
       `SELECT so.taxable_total, so.status,
               (SELECT sum(taxable_total) FROM invoices i WHERE i.sales_order_id = so.id AND i.status <> 'cancelled' AND i.id <> $2) AS billed,
               (SELECT sum(cr.impact_amount) FROM change_requests cr JOIN projects p ON p.id = cr.project_id
                 WHERE p.sales_order_id = so.id AND cr.status = 'approved') AS extra,
               (SELECT taxable_total FROM invoices WHERE id = $2) AS this_taxable
-         FROM sales_orders so WHERE so.id = $1 FOR UPDATE`, [salesOrderId, invoiceId])).rows[0];
+         FROM sales_orders so WHERE so.id = $1 AND so.organization_id = $3 FOR UPDATE`, [salesOrderId, invoiceId, orgId])).rows[0];
     if (!so) throw invalid("Unknown sales order.");
     if (so.status === "cancelled") throw conflict("This sales order is cancelled.");
     const cap = toPaise(so.taxable_total) + toPaise(so.extra ?? "0");
@@ -135,10 +142,9 @@ export class InvoiceService {
     need(a, "finance.invoice.issue");
     const d = parse(InvoiceInputSchema, body);
     const id = await this.db.tx(async (q) => {
-      if (!(await q.query(`SELECT 1 FROM clients WHERE id = $1 AND organization_id = $2`, [d.clientId, a.orgId])).rows.length) throw invalid("Unknown client.", { clientId: ["Unknown"] });
-      if (d.salesOrderId && !(await q.query(`SELECT 1 FROM sales_orders WHERE id = $1 AND client_id = $2`, [d.salesOrderId, d.clientId])).rows.length) throw invalid("That sales order belongs to another client.");
+      await this.checkRefs(q, a, d);
       const id = await this.createDraft(q, a, d);
-      if (d.salesOrderId) await this.checkOrderCap(q, d.salesOrderId, id);
+      if (d.salesOrderId) await this.checkOrderCap(q, a.orgId, d.salesOrderId, id);
       return id;
     });
     return this.get(a, id);
@@ -180,7 +186,7 @@ export class InvoiceService {
         clientId: so.client_id, salesOrderId, invoiceDate: this.today(), notes: `Against sales order ${so.number}`,
         lines: lines.map((l) => ({ description: l.description, hsnSac: l.hsn_sac, quantity: l.quantity, unitPrice: l.unit_price, discountPct: l.discount_pct })),
       });
-      await this.checkOrderCap(q, salesOrderId, id);
+      await this.checkOrderCap(q, a.orgId, salesOrderId, id);
       return id;
     });
     return this.get(a, id);
@@ -195,9 +201,10 @@ export class InvoiceService {
       if (!cur) throw notFound("Invoice");
       if (cur.status !== "draft") throw conflict("Issued invoices can't be edited. Raise a credit note.");
       if (cur.milestone_id || cur.subscription_id) throw conflict("This draft comes from a milestone or subscription. Delete it and regenerate instead.");
+      await this.checkRefs(q, a, d);
       await q.query(`DELETE FROM invoices WHERE id = $1`, [id]);
       const nid = await this.createDraft(q, a, d);
-      if (d.salesOrderId) await this.checkOrderCap(q, d.salesOrderId, nid);
+      if (d.salesOrderId) await this.checkOrderCap(q, a.orgId, d.salesOrderId, nid);
       return nid;
     });
     return this.get(a, newId);
@@ -239,7 +246,7 @@ export class InvoiceService {
       // Re-price with the rules in force on the invoice date; drafts may predate a rate change.
       const priced = await priceLines(q, a.orgId, lines.map((l) => ({ description: l.description, hsnSac: l.hsn_sac, quantity: l.quantity, unitPrice: l.unit_price, discountPct: l.discount_pct })), cur.invoice_date, cur.supply_type);
       if (priced.totals.grandTotal !== cur.total) throw conflict(`GST rates changed since this draft was made (total would be ${priced.totals.grandTotal}). Recreate the draft.`);
-      if (cur.sales_order_id) await this.checkOrderCap(q, cur.sales_order_id, id);
+      if (cur.sales_order_id) await this.checkOrderCap(q, a.orgId, cur.sales_order_id, id);
       const s = await getSettings(q, a.orgId);
       const n = await nextNumber(q, a.orgId, `invoice:${fyCode(cur.invoice_date)}`);
       const number = `${s.profile.docPrefix}/INV/${fyCode(cur.invoice_date)}/${String(n).padStart(4, "0")}`;

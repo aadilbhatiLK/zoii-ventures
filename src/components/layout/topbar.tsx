@@ -50,7 +50,10 @@ import { cn } from "@/lib/utils";
 function CreateMenu() {
   const { can } = useAuth();
   const { openSheet } = useGlobalUi();
-  if (!can("leads.create") && !can("clients.create")) return null;
+  const router = useRouter();
+  const quote = can("quotations.create");
+  const doc = can("documents.create");
+  if (!can("leads.create") && !can("clients.create") && !quote && !doc) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -70,13 +73,17 @@ function CreateMenu() {
             <Building2 /> Client
           </DropdownMenuItem>
         )}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem disabled>
-          <Receipt /> Quotation <span className="text-2xs ml-auto">Sprint 3</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem disabled>
-          <FileText /> BRD / PRD <span className="text-2xs ml-auto">Sprint 3</span>
-        </DropdownMenuItem>
+        {(quote || doc) && <DropdownMenuSeparator />}
+        {quote && (
+          <DropdownMenuItem onSelect={() => router.push("/quotations/new")}>
+            <Receipt /> Quotation
+          </DropdownMenuItem>
+        )}
+        {doc && (
+          <DropdownMenuItem onSelect={() => router.push("/documents")}>
+            <FileText /> BRD / PRD
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

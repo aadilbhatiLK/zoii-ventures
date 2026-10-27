@@ -203,7 +203,8 @@ async function login(page, email, { mfa = false } = {}) {
   });
 
   await step("planned modules show an honest roadmap page", async () => {
-    await page.goto(`${BASE}/finance/invoices`);
+    // /finance/invoices was the example until Sprint 5 built it; meetings are still planned.
+    await page.goto(`${BASE}/meetings`);
     await page.getByText("This module isn't built yet").waitFor();
     await page.screenshot({ path: path.join(OUT, "11-planned-module.png") });
   });

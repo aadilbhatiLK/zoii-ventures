@@ -93,12 +93,17 @@ export class DocumentService {
     need(a, "documents.create");
     const d = parse(DocumentEditSchema, body);
     await this.db.tx(async (q) => {
-      await this.get(a, id, q);
+      const doc = await this.get(a, id, q);
       const v = await this.openVersion(q, a, id);
+      // Drafts belong to the document owner and the version's author; reviewers may edit too
+      // (and then can't approve it, see recordEditor). Anyone else with documents.create can't.
+      if (doc.ownerId !== a.userId && v.author_id !== a.userId && !a.permissions.has("documents.approve"))
+        throw forbidden("Only the document owner or an approver can edit this draft.");
       if (v.status !== "draft") throw conflict(v.status === "in_review" ? "This version is in review. Withdraw it to edit." : "Start a new version to make changes.");
       if (d.expectedUpdatedAt && iso(v.updated_at) !== new Date(d.expectedUpdatedAt).toISOString()) throw conflict("Someone else saved this draft after you opened it. Reload and retry.");
       await q.query(`UPDATE document_versions SET content = $2, change_summary = coalesce($3, change_summary) WHERE id = $1`, [v.id, d.content, d.changeSummary ?? null]);
       await recordEditor(q, a, "document_version", v.id);
+      await audit(q, a, "document.edit", "document", id, { version: v.version, length: { from: v.content.length, to: d.content.length } });
       await q.query(`UPDATE documents SET updated_at = now() WHERE id = $1`, [id]);
     });
     return this.get(a, id);

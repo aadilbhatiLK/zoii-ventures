@@ -84,7 +84,8 @@ export function adminRoutes(r: Router, deps: Deps) {
     if (query.action) { params.push(`${String(query.action)}%`); where.push(`e.action LIKE $${params.length}`); }
     if (query.from) { params.push(String(query.from)); where.push(`e.occurred_at >= $${params.length}::date`); }
     if (query.to) { params.push(String(query.to)); where.push(`e.occurred_at < ($${params.length}::date + 1)`); }
-    const page = Math.max(1, Number(query.page ?? 1) || 1);
+    const n = Number(query.page ?? 1);
+    const page = Number.isSafeInteger(n) ? Math.min(Math.max(1, n), 100_000) : 1;
     const total = Number((await db.query<{ n: string }>(`SELECT count(*) AS n FROM audit_events e WHERE ${where.join(" AND ")}`, params)).rows[0].n);
     const rows = await db.query<{ id: string; occurred_at: Date; actor_user_id: string | null; full_name: string | null; action: string; entity_type: string; entity_id: string | null; changes: Record<string, unknown>; request_id: string | null; ip: string | null }>(
       `SELECT e.*, u.full_name FROM audit_events e LEFT JOIN users u ON u.id = e.actor_user_id WHERE ${where.join(" AND ")} ORDER BY e.id DESC LIMIT 50 OFFSET ${(page - 1) * 50}`, params);

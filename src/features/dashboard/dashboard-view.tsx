@@ -337,9 +337,9 @@ export function DashboardView() {
         <Card className={s.revenueSeries ? "lg:col-span-1" : "lg:col-span-3"}>
           <CardHeader>
             <div>
-              <CardTitle>Not yet in this dashboard</CardTitle>
+              <CardTitle>On their own pages</CardTitle>
               <p className="text-fg-muted mt-0.5 text-xs">
-                Shown once the module exists, from real records — never estimated.
+                These modules are live, but this dashboard doesn&apos;t summarise them yet.
               </p>
             </div>
           </CardHeader>
@@ -347,29 +347,22 @@ export function DashboardView() {
             className={cn("grid gap-2 sm:grid-cols-2", !s.revenueSeries && "lg:grid-cols-4")}
           >
             {[
-              {
-                icon: <BadgeCheck />,
-                t: "Pending approvals",
-                d: "Quotations & documents · Sprint 3",
-              },
-              {
-                icon: <Users />,
-                t: "Project delivery & workload",
-                d: "Projects module · Sprint 4",
-              },
-              { icon: <Wallet />, t: "Receivables & collections", d: "Finance ledger · Sprint 5" },
-              { icon: <Landmark />, t: "Profitability by product", d: "Finance ledger · Sprint 5" },
+              { icon: <BadgeCheck />, t: "Pending approvals", d: "Quotations, documents, payroll, leave", href: "/approvals" },
+              { icon: <Users />, t: "Project delivery", d: "Projects, milestones and tasks", href: "/projects" },
+              { icon: <Wallet />, t: "Receivables & collections", d: "Ageing and overdue invoices", href: "/finance" },
+              { icon: <Landmark />, t: "Profit & loss", d: "Financial reports from the ledger", href: "/finance/reports" },
             ].map((x) => (
-              <div
+              <Link
                 key={x.t}
-                className="border-border flex items-start gap-2.5 rounded-md border border-dashed p-3"
+                href={x.href}
+                className="border-border hover:bg-surface-muted flex items-start gap-2.5 rounded-md border p-3"
               >
                 <span className="text-fg-subtle [&_svg]:size-4">{x.icon}</span>
                 <div>
                   <p className="text-[13px] font-medium">{x.t}</p>
                   <p className="text-fg-subtle text-xs">{x.d}</p>
                 </div>
-              </div>
+              </Link>
             ))}
           </CardContent>
         </Card>
@@ -433,45 +426,51 @@ function UpcomingFollowUps() {
   );
 }
 
-function NonSalesDashboard({ summary }: { summary: DashboardSummary }) {
+export function NonSalesDashboard({ summary }: { summary: DashboardSummary }) {
   const { user } = useAuth();
   const role = user?.roles[0];
-  const modules: Record<string, { title: string; items: string[]; sprint: number }> = {
+  type Ln = { label: string; href: string };
+  const modules: Record<string, { title: string; links: Ln[] }> = {
     finance_manager: {
       title: "Finance workspace",
-      items: [
-        "Collections & receivables ageing",
-        "GST summaries",
-        "Bank reconciliation status",
-        "Pending financial approvals",
+      links: [
+        { label: "Receivables & payables", href: "/finance" },
+        { label: "GST summary", href: "/finance/reports" },
+        { label: "Bank reconciliation", href: "/finance/banking" },
+        { label: "Approvals", href: "/approvals" },
       ],
-      sprint: 5,
     },
     accountant: {
       title: "Accounts workspace",
-      items: ["Invoices to issue", "Receipts to allocate", "Bank lines to reconcile"],
-      sprint: 5,
+      links: [
+        { label: "Invoices", href: "/finance/invoices" },
+        { label: "Receipts", href: "/finance/receipts" },
+        { label: "Bank lines", href: "/finance/banking" },
+      ],
     },
     project_manager: {
       title: "Delivery workspace",
-      items: [
-        "Active projects & milestones",
-        "Overdue tasks",
-        "Client approvals pending",
-        "Team allocation",
+      links: [
+        { label: "Projects & milestones", href: "/projects" },
+        { label: "Tasks", href: "/tasks" },
+        { label: "Approvals", href: "/approvals" },
       ],
-      sprint: 4,
     },
     hr_manager: {
       title: "People workspace",
-      items: ["Attendance & leave", "Payroll preparation", "Onboarding checklist"],
-      sprint: 6,
+      links: [
+        { label: "Employees", href: "/people" },
+        { label: "Attendance & leave", href: "/people/attendance" },
+        { label: "Payroll", href: "/people/payroll" },
+      ],
     },
   };
   const m = (role && modules[role]) ?? {
     title: "Your workspace",
-    items: ["Assigned tasks", "Approvals", "Announcements"],
-    sprint: 4,
+    links: [
+      { label: "My tasks", href: "/tasks" },
+      { label: "My profile", href: "/me" },
+    ],
   };
   return (
     <div className="space-y-4">
@@ -479,7 +478,9 @@ function NonSalesDashboard({ summary }: { summary: DashboardSummary }) {
         <ChartCard
           title="Invoiced vs collected"
           description="Last 12 months, before GST"
-          badge={<DemoTag label="Demo fixture" />}
+          badge={
+            summary.revenueSeries.origin === "fixture" ? <DemoTag label="Demo fixture" /> : <Badge tone="success">From the ledger</Badge>
+          }
           table={{
             columns: ["Month", "Invoiced", "Collected"],
             rows: summary.revenueSeries.points.map((p) => [
@@ -502,8 +503,17 @@ function NonSalesDashboard({ summary }: { summary: DashboardSummary }) {
       <Card>
         <EmptyState
           icon={<CalendarClock />}
-          title={`${m.title} arrives in Sprint ${m.sprint}`}
-          description={`It will show: ${m.items.join(" · ")}. Until those modules exist this space stays empty instead of showing invented numbers.`}
+          title={m.title}
+          description="This dashboard doesn't summarise your work yet. Open it where it lives:"
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              {m.links.map((l) => (
+                <Button key={l.href} size="sm" asChild>
+                  <Link href={l.href}>{l.label}</Link>
+                </Button>
+              ))}
+            </div>
+          }
         />
       </Card>
     </div>

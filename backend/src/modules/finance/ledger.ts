@@ -72,6 +72,13 @@ export async function postJournal(
   const cr = sum(lines.map((l) => toPaise(l.credit ?? "0")));
   if (lines.length < 2 || dr !== cr || dr === 0n) throw invalid(`Journal doesn't balance (debits ${fromPaise(dr)}, credits ${fromPaise(cr)}).`);
   for (const l of lines) if (toPaise(l.debit ?? "0") < 0n || toPaise(l.credit ?? "0") < 0n) throw invalid("Amounts can't be negative.");
+  // Party ids must belong to this organisation (manual journals and bank categorisation pass them through).
+  for (const l of lines) {
+    if (!l.partyId) continue;
+    const table = { client: "clients", vendor: "vendors", employee: "employees" }[l.partyType ?? "client"];
+    if (!l.partyType || !isUuid(l.partyId) || !(await q.query(`SELECT 1 FROM ${table} WHERE id = $1 AND organization_id = $2`, [l.partyId, a.orgId])).rows.length)
+      throw invalid("Unknown party on a journal line.", { partyId: ["Unknown"] });
+  }
   // Lock the period row (FOR SHARE) for the rest of this transaction: a concurrent close
   // (which updates the row) waits for us, and we see its result if it committed first.
   await q.query(`INSERT INTO fiscal_periods (organization_id, month) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [a.orgId, e.date.slice(0, 7)]);

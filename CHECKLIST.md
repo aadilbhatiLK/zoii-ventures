@@ -26,8 +26,8 @@ Legend: [x] done and verified · [~] partial · [ ] not started
 - [x] Audit event on every write; optimistic concurrency (409)
 - [x] Leads, clients, activities, follow-ups, convert (one transaction), search, notifications, dashboard
 - [x] Frontend switched to api mode; `create-admin` CLI for the first real user
-- [ ] SMS provider (DLT-registered) — no provider configured; OTP messages are marked "blocked"
-- [ ] Email provider — same
+- [ ] SMS provider (DLT-registered) — no provider configured; phone OTP sign-in is off
+- [ ] Email provider — none; admins hand over one-time invite/reset links instead (see docs/integrations.md)
 - [ ] Lead CSV import
 - [ ] Nonce-based CSP
 
@@ -73,8 +73,27 @@ Legend: [x] done and verified · [~] partial · [ ] not started
 
 ## Cross-cutting
 
-- [x] 48 backend integration tests, 78 frontend unit/component tests, migration checks, two browser e2e scripts — all passing locally
+- [x] 90 backend integration tests (PGlite by default; the same suite passes on Postgres 16 with `PG_TEST_URL`), 85 frontend unit/component tests, migration checks, three browser e2e scripts — all passing locally
 - [x] `npm audit`: 0 vulnerabilities in root and backend
 - [~] Independent review of Sprint 2–6 code — see docs/security-baseline.md
-- [ ] Managed Postgres, hosting, backups with tested restore — need credentials
+- [~] Hosting live on Vercel + kuicko2 (see DEPLOY.md). Backup/restore drilled on a local Postgres 16 copy only; no scheduled backups yet
 - [ ] Shared rate-limit store (in-memory per instance today) and a separate worker process for multi-instance deploys
+
+## Stabilization (2026-10-27)
+
+Each item has a regression test in `backend/tests/stabilization-phase1.test.ts`, `stabilization-phase2.test.ts` or `tests/unit/stabilization.test.tsx` that failed on the previous code.
+
+- [x] Partial updates no longer apply create-time defaults (project team, task priority, user title)
+- [x] Quotation edits keep the lead and BRD links unless explicitly cleared
+- [x] HR managers can't unlink their own employee record to change their bank details or salary
+- [x] Proxy trust is an explicit address list; spoofed `X-Forwarded-For` is ignored; optional HMAC-signed client IP from the web tier
+- [x] MFA: per account+IP and account-wide limits counted inside the transaction, TOTP replay protection
+- [x] Sign-in lockout per account+IP (5) with an account-wide ceiling (25); forgot-password throttled per IP
+- [x] Production config validated at startup (`npm run cli -- check-config` to check before a restart)
+- [x] Approval links open real pages; approval decisions refresh leave, documents, projects and ledger lists
+- [x] Invoice draft edits validate client and sales order; billing cap scoped to the organisation; journal party ids checked
+- [x] Document drafts editable only by owner, author or approver; edits and team changes audited
+- [x] Admin-issued one-time invite/reset links when no email provider is configured
+- [x] `npm run dev` / `migrate` / `seed:demo` / `create-admin` work (esbuild instead of tsx)
+- [x] Stale "arrives in Sprint N" placeholders replaced; client tabs show live records; dashboard labels real ledger data correctly
+- [ ] Scheduled subscription billing and housekeeping purges — need approval (they change production behaviour)

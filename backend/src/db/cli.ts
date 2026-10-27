@@ -8,6 +8,11 @@ import { openDb } from "./open";
 
 const [cmd, ...rest] = process.argv.slice(2);
 const config = loadConfig();
+if (cmd === "check-config") {
+  // Pre-restart check: loadConfig() has already thrown with the problems if any. Prints no values.
+  console.log(`Configuration ok (${config.env}).`);
+  process.exit(0);
+}
 const db = await openDb(config);
 try {
   if (cmd === "migrate") {

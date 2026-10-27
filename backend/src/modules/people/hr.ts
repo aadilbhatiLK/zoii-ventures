@@ -133,10 +133,10 @@ export class HrService {
       return r.rows[0].id;
     }
     await q.query(
-      `UPDATE employees SET user_id=$2, full_name=$3, work_email=$4, phone=$5, department_id=$6, designation=$7, manager_employee_id=$8, date_of_joining=$9, employment_type=$10, work_state=$11,
+      `UPDATE employees SET user_id = CASE WHEN $17 THEN $2::uuid ELSE user_id END, full_name=$3, work_email=$4, phone=$5, department_id=$6, designation=$7, manager_employee_id=$8, date_of_joining=$9, employment_type=$10, work_state=$11,
               pan=coalesce($12, pan), uan=coalesce($13, uan), bank_account_enc=coalesce($14, bank_account_enc), bank_account_last4=coalesce($15, bank_account_last4), bank_ifsc=coalesce($16, bank_ifsc) WHERE id = $1`,
       [id, d.userId ?? null, d.fullName, d.workEmail ?? null, d.phone ?? null, d.departmentId ?? null, d.designation, d.managerEmployeeId ?? null, d.dateOfJoining, d.employmentType, d.workState ?? null,
-       d.pan ?? null, d.uan ?? null, bank?.enc ?? null, bank?.last4 ?? null, d.bankIfsc ?? null]);
+       d.pan ?? null, d.uan ?? null, bank?.enc ?? null, bank?.last4 ?? null, d.bankIfsc ?? null, d.userId !== undefined]);
     return id;
   }
 
@@ -159,6 +159,8 @@ export class HrService {
       const emp = isUuid(id) ? (await q.query<{ user_id: string | null }>(`SELECT user_id FROM employees WHERE id = $1 AND organization_id = $2 FOR UPDATE`, [id, a.orgId])).rows[0] : undefined;
       if (!emp) throw notFound("Employee");
       // Salary goes to the bank account on file: nobody edits their own HR record's bank details.
+      // An omitted userId keeps the link (see writeEmployee), so unlinking needs an explicit value,
+      // and that is refused for one's own record: an unlinked record would escape both checks.
       if (emp.user_id === a.userId && d.userId !== undefined && d.userId !== a.userId) throw forbidden("You can't unlink your own employee record.");
       if (emp.user_id === a.userId && d.bankAccount) throw forbidden("You can't change your own bank details. Ask another HR manager.");
       await this.writeEmployee(q, a, d, id);

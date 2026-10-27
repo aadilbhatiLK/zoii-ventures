@@ -57,11 +57,19 @@ export function totp(secret: string, at = Date.now(), step = 30): string {
   return String(n % 1_000_000).padStart(6, "0");
 }
 
-/** Accepts the current step and one step either side (clock drift). */
-export function verifyTotp(secret: string, code: string, at = Date.now()): boolean {
+/**
+ * Accepts the current step and one step either side (clock drift). Returns the matched
+ * 30-second step number, so callers can refuse a step that was already used.
+ */
+export function matchTotp(secret: string, code: string, at = Date.now()): number | null {
   const c = Buffer.from(code.trim());
-  return [-1, 0, 1].some((d) => safeEqual(Buffer.from(totp(secret, at + d * 30_000)), c));
+  for (const d of [-1, 0, 1]) {
+    const t = at + d * 30_000;
+    if (safeEqual(Buffer.from(totp(secret, t)), c)) return Math.floor(t / 30_000);
+  }
+  return null;
 }
+export const verifyTotp = (secret: string, code: string, at = Date.now()) => matchTotp(secret, code, at) !== null;
 
 export function otpauthUri(secret: string, account: string, issuer = "Zoii Business OS") {
   return `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(account)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;

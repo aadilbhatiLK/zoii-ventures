@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { buildApp } from "../src/app";
 import { loadConfig } from "../src/config";
-import { createPgliteDb, type Db } from "../src/db";
+import pg from "pg";
+import { createPgDb, createPgliteDb, type Db } from "../src/db";
 import { syncRbac } from "../src/db/bootstrap";
 import { seedDemo } from "../src/db/demo-seed";
 import { migrate } from "../src/db/migrate";
@@ -14,9 +15,9 @@ export interface TestCtx {
   clock: { now: Date };
 }
 
-export async function setup(opts: { seed?: boolean; now?: Date } = {}): Promise<TestCtx> {
-  const config = loadConfig({ NODE_ENV: "test", AUTH_DEV_STATIC_CODES: "true", CORS_ORIGINS: "http://localhost:3000" } as NodeJS.ProcessEnv);
-  const db = await createPgliteDb();
+export async function setup(opts: { seed?: boolean; now?: Date; env?: Record<string, string>; deliver?: boolean } = {}): Promise<TestCtx> {
+  const config = loadConfig({ NODE_ENV: "test", AUTH_DEV_STATIC_CODES: "true", CORS_ORIGINS: "http://localhost:3000", ...opts.env } as NodeJS.ProcessEnv);
+  const db = await freshDb();
   await migrate(db);
   await syncRbac(db);
   const clock = { now: opts.now ?? new Date() };
@@ -24,9 +25,26 @@ export async function setup(opts: { seed?: boolean; now?: Date } = {}): Promise<
   const sent: TestCtx["sent"] = [];
   const app = await buildApp({
     db, config, logger: false, now: () => clock.now,
-    messages: { async send(m) { sent.push(m); return true; } },
+    messages: { async send(m) { if (opts.deliver === false) return false; sent.push(m); return true; } },
   });
   return { app, db, ids: "ids" in r ? r.ids! : new Map(), sent, clock };
+}
+
+/**
+ * Embedded PGlite by default. With PG_TEST_URL (a role that may CREATE DATABASE) every setup()
+ * gets its own new database on that server, so the same suite runs against real Postgres.
+ */
+async function freshDb(): Promise<Db> {
+  const url = process.env.PG_TEST_URL;
+  if (!url) return createPgliteDb();
+  const name = `zoii_test_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+  const admin = new pg.Client({ connectionString: url });
+  await admin.connect();
+  await admin.query(`CREATE DATABASE ${name}`);
+  await admin.end();
+  const u = new URL(url);
+  u.pathname = `/${name}`;
+  return createPgDb(u.toString());
 }
 
 export const H = { "x-requested-with": "zoii-web", "content-type": "application/json" };

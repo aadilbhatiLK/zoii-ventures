@@ -1,6 +1,7 @@
 import { z } from "zod";
-import type { FastifyReply } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { SESSION_COOKIE, type Router } from "../../app";
+import { clientIp } from "../../lib/client-ip";
 import type { Deps } from "../../lib/context";
 import { parse } from "../../lib/errors";
 import { getUserRow, toUser } from "../users/repo";
@@ -10,7 +11,7 @@ const authLimit = { max: 30, timeWindow: "1 minute" };
 
 export function authRoutes(r: Router, deps: Deps) {
   const svc = new AuthService(deps);
-  const meta = (c: { req: { ip: string; headers: Record<string, unknown> } }) => ({ ip: c.req.ip ?? null, userAgent: String(c.req.headers["user-agent"] ?? "") });
+  const meta = (c: { req: FastifyRequest }) => ({ ip: clientIp(c.req, deps.config, deps.now), userAgent: String(c.req.headers["user-agent"] ?? "") });
   const setCookie = (reply: FastifyReply, token: string) =>
     reply.setCookie(SESSION_COOKIE, token, {
       httpOnly: true, secure: deps.config.cookieSecure, sameSite: "lax", path: "/",

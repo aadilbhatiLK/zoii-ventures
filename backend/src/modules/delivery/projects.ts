@@ -49,6 +49,13 @@ registerApprovalHandler("change_request", async (q, a, id, approved, note) => {
   await emit(q, a, "change_request.approved", "change_request", id, { projectId: cr.project_id, amount: cr.impact_amount });
 });
 
+// Updates are partial: a field the caller didn't send must not fall back to its create-time
+// default (zod still applies .default() inside .partial(), which used to wipe the team).
+const ProjectUpdateSchema = ProjectCreateSchema.extend({
+  billable: ProjectCreateSchema.shape.billable.unwrap(), memberIds: ProjectCreateSchema.shape.memberIds.unwrap(),
+}).partial().extend({ status: z.enum(["on_hold", "active", "completed", "cancelled"]).optional() });
+const TaskUpdateSchema = TaskInputSchema.extend({ priority: TaskInputSchema.shape.priority.unwrap() }).partial();
+
 export class ProjectService {
   constructor(private deps: Deps) {}
   private get db() { return this.deps.db; }
@@ -157,7 +164,7 @@ export class ProjectService {
 
   async update(a: Actor, id: string, body: unknown) {
     need(a, "projects.manage", "projects.activate");
-    const d = parse(ProjectCreateSchema.partial().extend({ status: z.enum(["on_hold", "active", "completed", "cancelled"]).optional() }), body);
+    const d = parse(ProjectUpdateSchema, body);
     await this.db.tx(async (q) => {
       const p = await this.prow(q, a, id, true);
       if (d.status) {
@@ -187,7 +194,7 @@ export class ProjectService {
         const mgr = d.managerId ?? p.manager_id;
         for (const m of new Set([...d.memberIds, mgr])) await q.query(`INSERT INTO project_members (organization_id, project_id, user_id, role) VALUES ($1,$2,$3,$4)`, [a.orgId, id, m, m === mgr ? "lead" : "member"]);
       }
-      await audit(q, a, "project.update", "project", id, { status: d.status ? { from: p.status, to: d.status } : undefined });
+      await audit(q, a, "project.update", "project", id, { status: d.status ? { from: p.status, to: d.status } : undefined, memberIds: d.memberIds, name: d.name, managerId: d.managerId });
     });
     return this.get(a, id);
   }
@@ -347,7 +354,7 @@ export class ProjectService {
   }
 
   async updateTask(a: Actor, id: string, body: unknown) {
-    const d = parse(TaskInputSchema.partial(), body);
+    const d = parse(TaskUpdateSchema, body);
     await this.db.tx(async (q) => {
       const { manage } = await this.taskRow(q, a, id);
       if (!manage) throw forbidden("Only project managers can edit task details. You can move your tasks on the board.");

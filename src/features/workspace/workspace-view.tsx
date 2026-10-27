@@ -54,7 +54,7 @@ export function WorkspaceView() {
           <CardContent>
             {!hasLeads ? (
               <p className="text-fg-muted py-6 text-center text-[13px]">
-                Tasks for your role arrive with the Projects and HR modules.
+                Your tasks, leave and payslips are under My Tasks and My Profile.
               </p>
             ) : work.length === 0 ? (
               <p className="text-fg-muted py-6 text-center text-[13px]">

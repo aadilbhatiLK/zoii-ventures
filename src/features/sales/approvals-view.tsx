@@ -12,12 +12,15 @@ import { useApi, useApiMutation } from "@/lib/api/hooks";
 import type { ApprovalRequest } from "@/lib/api/modules/sales";
 import { formatRelative } from "@/lib/formatting";
 
+/** Every list an approval can change (prefix match): leave lives under ["hr", …]. */
+export const APPROVAL_INVALIDATES = [["approvals"], ["quotation"], ["quotations"], ["document"], ["documents"], ["project"], ["projects"], ["payroll"], ["hr", "leave"], ["hr", "balances"], ["finance"], ["notifications"]];
+
 export function ApprovalsView() {
   const [tab, setTab] = useState<"pending" | "decided">("pending");
   const q = useApi<ApprovalRequest[]>(["approvals", tab], `/approvals?status=${tab}`);
   const [rejecting, setRejecting] = useState<ApprovalRequest | null>(null);
   const decide = useApiMutation<{ id: string; decision: "approve" | "reject"; note?: string }>("POST", (b) => `/approvals/${b.id}/decide`, {
-    invalidate: [["approvals"], ["quotation"], ["quotations"], ["document"], ["project"], ["payroll"], ["leave"]],
+    invalidate: APPROVAL_INVALIDATES,
     success: "Decision recorded",
   });
   const mine = (q.data ?? []).filter((x) => !x.canDecide);

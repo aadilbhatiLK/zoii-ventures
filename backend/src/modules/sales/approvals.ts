@@ -9,14 +9,19 @@ import { iso, isUuid } from "../../lib/query";
 type EntityType = ApprovalRequest["entityType"];
 type Handler = (q: Queryable, a: Actor, entityId: string, approved: boolean, note: string | null) => Promise<void>;
 const handlers = new Map<EntityType, Handler>();
-const hrefs: Record<EntityType, (id: string) => string> = {
-  document_version: (id) => `/documents?version=${id}`,
+// Links must match real pages in src/app. Versions and change requests open their parent
+// record, whose id comes from PARENT_SQL (null when the parent is gone: fall back to the list).
+const hrefs: Record<EntityType, (id: string, parentId: string | null) => string> = {
+  document_version: (_id, doc) => (doc ? `/documents/${doc}` : "/documents"),
   quotation: (id) => `/quotations/${id}`,
-  change_request: (id) => `/projects?cr=${id}`,
-  payroll_run: (id) => `/payroll/${id}`,
-  leave_request: () => `/leave`,
-  journal_entry: () => `/finance/journals`,
+  change_request: (_id, project) => (project ? `/projects/${project}` : "/projects"),
+  payroll_run: (id) => `/people/payroll/${id}`,
+  leave_request: () => `/people/attendance`,
+  journal_entry: (id) => `/finance/ledger?entry=${id}`,
 };
+const PARENT_SQL = `CASE ar.entity_type
+    WHEN 'document_version' THEN (SELECT document_id::text FROM document_versions WHERE id = ar.entity_id)
+    WHEN 'change_request' THEN (SELECT project_id::text FROM change_requests WHERE id = ar.entity_id) END AS parent_id`;
 
 export function registerApprovalHandler(type: EntityType, h: Handler) { handlers.set(type, h); }
 
@@ -57,12 +62,12 @@ export async function cancelPendingApproval(q: Queryable, entityType: EntityType
   await q.query(`UPDATE approval_requests SET status = 'cancelled', decided_at = now() WHERE entity_type = $1 AND entity_id = $2 AND status = 'pending'`, [entityType, entityId]);
 }
 
-interface Row { id: string; entity_type: EntityType; entity_id: string; title: string; reason: string; required_permission: string; status: ApprovalRequest["status"]; requested_by: string; requested_at: Date; decided_by: string | null; decided_at: Date | null; decision_note: string | null; edited_by_me?: boolean }
+interface Row { id: string; entity_type: EntityType; entity_id: string; title: string; reason: string; required_permission: string; status: ApprovalRequest["status"]; requested_by: string; requested_at: Date; decided_by: string | null; decided_at: Date | null; decision_note: string | null; edited_by_me?: boolean; parent_id?: string | null }
 
 const toApproval = (a: Actor) => (r: Row): ApprovalRequest => ({
   id: r.id, entityType: r.entity_type, entityId: r.entity_id, title: r.title, reason: r.reason, requiredPermission: r.required_permission,
   status: r.status, requestedBy: r.requested_by, requestedAt: iso(r.requested_at)!, decidedBy: r.decided_by, decidedAt: iso(r.decided_at),
-  decisionNote: r.decision_note, href: hrefs[r.entity_type](r.entity_id),
+  decisionNote: r.decision_note, href: hrefs[r.entity_type](r.entity_id, r.parent_id ?? null),
   canDecide: r.status === "pending" && r.requested_by !== a.userId && !r.edited_by_me && a.permissions.has(r.required_permission as Permission),
 });
 
@@ -73,7 +78,7 @@ export class ApprovalService {
     const perms = [...a.permissions];
     const st = status === "decided" ? ["approved", "rejected", "cancelled"] : ["pending"];
     const r = await this.deps.db.query<Row>(
-      `SELECT ar.*, EXISTS (SELECT 1 FROM record_editors re WHERE re.organization_id = ar.organization_id AND re.entity_type = ar.entity_type
+      `SELECT ar.*, ${PARENT_SQL}, EXISTS (SELECT 1 FROM record_editors re WHERE re.organization_id = ar.organization_id AND re.entity_type = ar.entity_type
                 AND re.entity_id = ar.entity_id AND re.user_id = $4) AS edited_by_me
          FROM approval_requests ar WHERE ar.organization_id = $1 AND ar.status = ANY($2)
          AND (ar.required_permission = ANY($3) OR ar.requested_by = $4)
@@ -87,7 +92,7 @@ export class ApprovalService {
     const d = parse(ApprovalDecisionSchema, body);
     if (!isUuid(id)) throw notFound("Approval");
     return this.deps.db.tx(async (q) => {
-      const r = (await q.query<Row>(`SELECT * FROM approval_requests WHERE id = $1 AND organization_id = $2 FOR UPDATE`, [id, a.orgId])).rows[0];
+      const r = (await q.query<Row>(`SELECT ar.*, ${PARENT_SQL} FROM approval_requests ar WHERE ar.id = $1 AND ar.organization_id = $2 FOR UPDATE OF ar`, [id, a.orgId])).rows[0];
       if (!r) throw notFound("Approval");
       if (!a.permissions.has(r.required_permission as Permission)) throw forbidden();
       if (r.status !== "pending") throw conflict("This approval was already decided.");
@@ -103,7 +108,7 @@ export class ApprovalService {
       if (!h) throw conflict(`No handler for ${r.entity_type}`);
       await h(q, a, r.entity_id, approved, d.note ?? null);
       await audit(q, a, approved ? "approval.approve" : "approval.reject", r.entity_type, r.entity_id, { approvalId: id, note: d.note ?? null });
-      await notify(q, a.orgId, r.requested_by, { kind: "system", title: `${approved ? "Approved" : "Rejected"}: ${r.title}`, body: d.note ?? "", href: hrefs[r.entity_type](r.entity_id) });
+      await notify(q, a.orgId, r.requested_by, { kind: "system", title: `${approved ? "Approved" : "Rejected"}: ${r.title}`, body: d.note ?? "", href: hrefs[r.entity_type](r.entity_id, r.parent_id ?? null) });
       return toApproval(a)({ ...r, status: approved ? "approved" : "rejected", decided_by: a.userId, decided_at: new Date(), decision_note: d.note ?? null });
     });
   }

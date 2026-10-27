@@ -3,13 +3,15 @@ import type { Session } from "@/lib/api/contracts";
 import { requiresMfa } from "@/lib/permissions";
 import type { Queryable } from "../../db";
 import type { Deps } from "../../lib/context";
-import { decrypt, encrypt, newNumericCode, newToken, newTotpSecret, otpauthUri, safeEqual, sha256, verifyTotp } from "../../lib/crypto";
+import { decrypt, encrypt, newNumericCode, newToken, matchTotp, newTotpSecret, otpauthUri, safeEqual, sha256 } from "../../lib/crypto";
 import { HttpError } from "../../lib/errors";
 import { getUserRow, toE164, toUser, type UserRow } from "../users/repo";
 
 const MAX_FAILURES = 5;
 const WINDOW_MIN = 10;
 const CHALLENGE_MIN = 5;
+/** Failure limits per key prefix within WINDOW_MIN; anything else gets MAX_FAILURES. */
+const LIMITS: Record<string, number> = { ip: 50, "reset-ip": 20, email: 25, mfa: 10 };
 // Verifying against a real hash when the account doesn't exist keeps response time flat.
 let dummyHash: Promise<string> | null = null;
 const getDummy = () => (dummyHash ??= hash("not-a-real-password-zoii"));
@@ -34,20 +36,24 @@ export class AuthService {
   private get db() { return this.deps.db; }
   private now() { return this.deps.now(); }
 
-  /** Per-identifier sliding window: 5 failures per account/challenge, 50 per IP (shared office NAT). */
-  async throttle(keys: string[]) {
+  /**
+   * Per-identifier sliding window of failures. The tight limits are per account *and* client IP,
+   * so someone guessing from one address can't lock the real user out from theirs; the looser
+   * account-wide limits still stop a distributed attack. IPs get 50 (shared office NAT).
+   */
+  async throttle(keys: string[], q: Queryable = this.db) {
     const since = new Date(this.now().getTime() - WINDOW_MIN * 60_000);
-    const r = await this.db.query<{ key: string; n: string }>(
+    const r = await q.query<{ key: string; n: string }>(
       `SELECT key, count(*) AS n FROM auth_attempts WHERE key = ANY($1) AND NOT succeeded AND occurred_at > $2 GROUP BY key`,
       [keys, since],
     );
     for (const row of r.rows) {
-      const max = row.key.startsWith("ip:") ? MAX_FAILURES * 10 : MAX_FAILURES;
-      if (Number(row.n) >= max) throw new HttpError("RATE_LIMITED", "Too many attempts. Try again in a few minutes.");
+      if (Number(row.n) >= (LIMITS[row.key.split(":")[0]] ?? MAX_FAILURES)) throw new HttpError("RATE_LIMITED", "Too many attempts. Try again in a few minutes.");
     }
   }
-  async record(key: string, ok: boolean, ip: string | null) {
-    await this.db.query(`INSERT INTO auth_attempts (key, succeeded, ip) VALUES ($1, $2, $3)`, [key, ok, ip]);
+  async record(key: string, ok: boolean, ip: string | null, q: Queryable = this.db) {
+    // Stamped with the app clock, the same clock throttle() measures its window with.
+    await q.query(`INSERT INTO auth_attempts (key, succeeded, ip, occurred_at) VALUES ($1, $2, $3, $4)`, [key, ok, ip, this.now()]);
   }
 
   async createSession(q: Queryable, user: UserRow, mfaSatisfied: boolean, meta: { ip: string | null; userAgent?: string }) {
@@ -77,8 +83,11 @@ export class AuthService {
     return r.rows[0];
   }
 
-  /** Locks the challenge row, checks expiry/attempts, then runs check(). Single use. */
-  private async consume(challengeId: string, kind: string, check: (c: { user_id: string | null; code_hash: Buffer }) => Promise<boolean>) {
+  /**
+   * Locks the challenge row, checks expiry/attempts, then runs check(). Single use.
+   * MFA failures also count per account, so starting new challenges doesn't reset the limit.
+   */
+  private async consume(challengeId: string, kind: string, ip: string | null, check: (c: { user_id: string | null; code_hash: Buffer }, q: Queryable) => Promise<boolean>) {
     if (!/^[0-9a-f-]{36}$/i.test(challengeId)) throw new HttpError("UNAUTHENTICATED", "This code has expired. Request a new one.");
     const key = `challenge:${challengeId}`;
     await this.throttle([key]);
@@ -90,21 +99,26 @@ export class AuthService {
       const c = r.rows[0];
       if (!c || c.consumed_at || new Date(c.expires_at) <= this.now()) throw new HttpError("UNAUTHENTICATED", "This code has expired. Request a new one.");
       if (c.attempts >= 5) throw new HttpError("RATE_LIMITED", "Too many incorrect codes. Request a new one.");
-      const ok = c.user_id !== null && (await check({ user_id: c.user_id, code_hash: Buffer.from(c.code_hash) }));
+      // MFA failures also count per account (across challenges). The user row lock serialises
+      // concurrent guesses, so the count read here can't be raced past the limit.
+      const accountKeys = kind === "mfa" && c.user_id ? [`mfa:${c.user_id}`, `mfa-ip:${c.user_id}|${ip}`] : [];
+      if (accountKeys.length) {
+        await q.query(`SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, [c.user_id]);
+        await this.throttle(accountKeys, q);
+      }
+      const ok = c.user_id !== null && (await check({ user_id: c.user_id, code_hash: Buffer.from(c.code_hash) }, q));
       if (!ok) {
         await q.query(
           `UPDATE auth_challenges SET attempts = attempts + 1, consumed_at = CASE WHEN attempts + 1 >= 5 THEN now() ELSE NULL END WHERE id = $1`,
           [c.id],
         );
+        for (const k of [key, ...accountKeys]) await this.record(k, false, ip, q);
         return { ok: false as const };
       }
       await q.query(`UPDATE auth_challenges SET consumed_at = now() WHERE id = $1`, [c.id]);
       return { ok: true as const, userId: c.user_id! };
-    }).then(async (res) => {
-      if (!res.ok) {
-        await this.record(key, false, null);
-        throw new HttpError("UNAUTHENTICATED", "That code is incorrect.");
-      }
+    }).then((res) => {
+      if (!res.ok) throw new HttpError("UNAUTHENTICATED", "That code is incorrect.");
       return res.userId;
     });
   }
@@ -137,7 +151,8 @@ export class AuthService {
   async login(emailRaw: string, password: string, meta: { ip: string | null; userAgent?: string }): Promise<SignInResult> {
     const email = emailRaw.trim().toLowerCase();
     const key = `email:${email}`;
-    await this.throttle([key, `ip:${meta.ip}`]);
+    const pairKey = `email-ip:${email}|${meta.ip}`;
+    await this.throttle([key, pairKey, `ip:${meta.ip}`]);
     const r = await this.db.query<{ id: string; password_hash: string | null; status: string }>(
       `SELECT id, password_hash, status FROM users WHERE email = $1`, [email],
     );
@@ -147,6 +162,7 @@ export class AuthService {
       : (await verify(await getDummy(), password).catch(() => false), false);
     if (!row || !valid || row.status !== "active") {
       await this.record(key, false, meta.ip);
+      await this.record(pairKey, false, meta.ip);
       await this.record(`ip:${meta.ip}`, false, meta.ip);
       throw new HttpError("UNAUTHENTICATED", "Email or password is incorrect.");
     }
@@ -157,16 +173,28 @@ export class AuthService {
   async verifyMfa(challengeId: string, code: string, meta: { ip: string | null; userAgent?: string }) {
     const key = this.deps.config.dataEncryptionKey;
     let enrolling = false;
-    const userId = await this.consume(challengeId, "mfa", async ({ user_id }) => {
-      const u = await this.db.query<{ mfa_secret_enc: string | null; mfa_pending_secret_enc: string | null }>(
-        `SELECT mfa_secret_enc, mfa_pending_secret_enc FROM users WHERE id = $1 AND status = 'active'`, [user_id],
+    const userId = await this.consume(challengeId, "mfa", meta.ip, async ({ user_id }, q) => {
+      // Row lock: two sign-ins racing with the same code can't both pass the replay check.
+      const u = await q.query<{ mfa_secret_enc: string | null; mfa_pending_secret_enc: string | null }>(
+        `SELECT mfa_secret_enc, mfa_pending_secret_enc FROM users WHERE id = $1 AND status = 'active' FOR UPDATE`, [user_id],
       );
       const row = u.rows[0];
       if (!row) return false;
       const secretBlob = row.mfa_secret_enc ?? row.mfa_pending_secret_enc;
       if (!secretBlob) return false;
       enrolling = !row.mfa_secret_enc;
-      return this.devCode(code) || verifyTotp(decrypt(secretBlob, key), code, this.now().getTime());
+      if (this.devCode(code)) return true;
+      const now = this.now().getTime();
+      const step = matchTotp(decrypt(secretBlob, key), code, now);
+      if (step === null) return false;
+      // Replay protection: refuse this step if it, or a later one, was already accepted. Used steps
+      // are at most one ahead of the clock, so only the steps from here to now+1 need checking.
+      const newest = Math.floor(now / 30_000) + 1;
+      const keys = Array.from({ length: Math.max(0, newest - step + 1) }, (_, i) => `totp:${user_id}:${step + i}`);
+      const used = await q.query(`SELECT 1 FROM auth_attempts WHERE key = ANY($1) AND succeeded LIMIT 1`, [keys]);
+      if (used.rows.length) return false;
+      await q.query(`INSERT INTO auth_attempts (key, succeeded, occurred_at) VALUES ($1, true, $2)`, [`totp:${user_id}:${step}`, this.now()]);
+      return true;
     });
     return this.db.tx(async (q) => {
       if (enrolling) {
@@ -205,7 +233,7 @@ export class AuthService {
   }
 
   async verifyOtp(challengeId: string, code: string, meta: { ip: string | null; userAgent?: string }) {
-    const userId = await this.consume(challengeId, "phone_otp", async ({ code_hash }) =>
+    const userId = await this.consume(challengeId, "phone_otp", meta.ip, async ({ code_hash }) =>
       this.devCode(code) || safeEqual(code_hash, sha256(code.trim())),
     );
     const user = await getUserRow(this.db, userId);
@@ -216,16 +244,22 @@ export class AuthService {
   async forgotPassword(emailRaw: string, meta: { ip: string | null }) {
     const email = emailRaw.trim().toLowerCase();
     const key = `reset:${email}`;
-    await this.throttle([key]);
+    await this.throttle([key, `reset-ip:${meta.ip}`]);
     await this.record(key, false, meta.ip);
+    await this.record(`reset-ip:${meta.ip}`, false, meta.ip);
     const u = (await this.db.query<{ id: string; organization_id: string }>(`SELECT id, organization_id FROM users WHERE email = $1 AND status IN ('active','invited')`, [email])).rows[0];
     if (!u) return;
     await this.sendResetLink(u.id, u.organization_id, email, "password_reset", 30);
   }
 
+  /**
+   * Issues a single-use set-password link. With no email provider it can't be delivered: the
+   * outbox records that, and the link comes back to the caller. Only admin routes may hand it on
+   * (forgotPassword discards it). The token itself is stored only as a hash.
+   */
   async sendResetLink(userId: string, orgId: string, email: string, template: "password_reset" | "invite", minutes: number) {
     const token = newToken();
-    await this.newChallenge(userId, orgId, "password_reset", token, minutes);
+    const c = await this.newChallenge(userId, orgId, "password_reset", token, minutes);
     const link = `${this.deps.config.appBaseUrl}/reset-password?token=${encodeURIComponent(token)}`;
     const sent = await this.deps.messages.send({ channel: "email", recipient: email, template, payload: { link } });
     if (!sent) {
@@ -235,7 +269,7 @@ export class AuthService {
         [orgId, email, template],
       );
     }
-    return sent;
+    return { sent, link: sent ? null : link, expiresAt: new Date(c.expires_at).toISOString() };
   }
 
   async resetPassword(token: string, password: string) {

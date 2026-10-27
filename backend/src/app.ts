@@ -11,6 +11,7 @@ import { sha256 } from "./lib/crypto";
 import { requiresMfa, type Role } from "@/lib/permissions";
 import { registerModules } from "./modules";
 import { isUuid } from "./lib/query";
+import { clientIp } from "./lib/client-ip";
 
 /** Every `:id` route parameter is a uuid; anything else is simply not found (never a 500). */
 function checkIdParams(req: FastifyRequest) {
@@ -88,6 +89,7 @@ export async function buildApp(opts: BuildOptions): Promise<FastifyInstance & { 
   });
   await app.register(rateLimit, {
     global: true,
+    keyGenerator: (req) => clientIp(req, config, deps.now),
     max: config.env === "test" ? 10_000 : 600,
     timeWindow: "1 minute",
     errorResponseBuilder: (req) => ({
@@ -163,7 +165,7 @@ export async function buildApp(opts: BuildOptions): Promise<FastifyInstance & { 
     if (deps.now().getTime() - new Date(row.last_seen_at).getTime() > 5 * 60_000) {
       await db.query(`UPDATE sessions SET last_seen_at = $2 WHERE id = $1`, [row.session_id, deps.now()]);
     }
-    return makeActor({ ...row, roles }, req.id, req.ip ?? null);
+    return makeActor({ ...row, roles }, req.id, clientIp(req, config, deps.now));
   };
 
   const ctxOf = (req: FastifyRequest, reply: FastifyReply) => ({
