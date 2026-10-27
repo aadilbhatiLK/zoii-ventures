@@ -1,7 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
-import type { FastifyRequest } from "fastify";
 import type { Config } from "../config";
+
+// Structural, not FastifyRequest: the web build type-checks this file (tests/unit) without backend deps.
+type RequestLike = { headers: Record<string, string | string[] | undefined>; ip: string };
 
 /**
  * The web tier (src/proxy.ts on Vercel) forwards /api/v1 calls and adds
@@ -26,9 +28,9 @@ export function verifyClientIp(secret: string, header: string, nowS: number): st
   return got.length === want.length && timingSafeEqual(got, want) ? ip : null;
 }
 
-const cache = new WeakMap<FastifyRequest, string>();
+const cache = new WeakMap<RequestLike, string>();
 
-export function clientIp(req: FastifyRequest, config: Pick<Config, "clientIpSecret">, now: () => Date): string {
+export function clientIp(req: RequestLike, config: Pick<Config, "clientIpSecret">, now: () => Date): string {
   const hit = cache.get(req);
   if (hit) return hit;
   const raw = req.headers[CLIENT_IP_HEADER];
