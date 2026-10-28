@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "rewrites": [
+    {
+      "source": "/api/v1/:path*",
+      "destination": "https://zoii-bos-api.98.70.24.252.nip.io/api/v1/:path*"
+    }
+  ]
+}
